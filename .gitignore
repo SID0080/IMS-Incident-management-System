@@ -1,0 +1,37 @@
+# ── Secrets ───────────────────────────────────────────────
+.env
+
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Runtime data ──────────────────────────────────────────
+# Uploaded incident images are user data, not source.
+uploads/
+*.db
+*.log
+
+# NOTE: app/ml/models/ is intentionally NOT ignored. The trained
+# classifier is only a few KB and ships with the repository so the
+# application runs immediately after cloning. MobileNetV2 weights are
+# downloaded by Keras on first use and are not stored here.
+
+# ── Editors / OS ──────────────────────────────────────────
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
