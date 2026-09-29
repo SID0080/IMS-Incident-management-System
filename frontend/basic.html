@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+<script>
+    // ── Per-tab session isolation ─────────────────────────────
+    // sessionStorage is scoped to a single tab, so different tabs can be
+    // signed in as different users at the same time — useful for demos.
+    // We shim just the two IMS auth keys; everything else on localStorage
+    // still works normally.
+    (function () {
+        const KEYS = new Set(['ims_token', 'ims_user']);
+        const _get = localStorage.getItem.bind(localStorage);
+        const _set = localStorage.setItem.bind(localStorage);
+        const _del = localStorage.removeItem.bind(localStorage);
+        localStorage.getItem    = k => KEYS.has(k) ? sessionStorage.getItem(k)      : _get(k);
+        localStorage.setItem    = (k, v) => KEYS.has(k) ? sessionStorage.setItem(k, v) : _set(k, v);
+        localStorage.removeItem = k => KEYS.has(k) ? sessionStorage.removeItem(k)   : _del(k);
+    })();
+</script>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMS | Intelligent Incident Management</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { heading:['Outfit','sans-serif'], body:['Inter','sans-serif'] },
+    colors: {
+      navy:  { 900:'#0A192F', 800:'#112240', 700:'#1C3454' },
+      brand: { blue:'#007AC3', purple:'#6A2A88', magenta:'#B8205C' },
+      ink:   { DEFAULT:'#0F172A', soft:'#334155', muted:'#64748B', faint:'#94A3B8' }
+    },
+    backgroundImage: { 'adani-gradient':'linear-gradient(to right,#007AC3,#6A2A88,#B8205C)' },
+    boxShadow: {
+      'soft-xs':'0 1px 2px rgba(10,25,47,.04)',
+      'soft':'0 1px 3px rgba(10,25,47,.05), 0 4px 12px -2px rgba(10,25,47,.05)',
+      'soft-md':'0 4px 6px -1px rgba(10,25,47,.05), 0 10px 24px -4px rgba(10,25,47,.06)',
+      'soft-lg':'0 8px 16px -4px rgba(10,25,47,.06), 0 24px 48px -8px rgba(10,25,47,.08)'
+    }
+  }}
+}
+</script>
+    <style>
+        .glass-panel { background: rgba(255,255,255,0.08); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.15); }
+        .glass-panel-light { background: rgba(255,255,255,0.12); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.2); }
+        .text-gradient { background: linear-gradient(to right, #007AC3, #6A2A88, #B8205C); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+        .hide-scrollbar::-webkit-scrollbar { display: none; }
+        .nav-scrolled { background: rgba(255,255,255,0.97) !important; box-shadow: 0 1px 20px rgba(10,25,47,0.08); }
+        .stat-card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+        .stat-card:hover { transform: translateY(-2px); }
+        .action-card { transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease; }
+        .action-card:hover { transform: translateY(-3px); box-shadow: 0 12px 40px -8px rgba(10,25,47,0.12); }
+        .gradient-border { position: relative; }
+        .gradient-border::before { content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 1px; background: linear-gradient(135deg, #007AC3, #6A2A88, #B8205C); -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite: destination-out; mask-composite: exclude; pointer-events: none; }
+        @keyframes pulse-slow { 0%,100% { opacity:1; } 50% { opacity:0.6; } }
+        .live-dot { animation: pulse-slow 2s ease-in-out infinite; }
+    </style>
+<style data-ui-upgrade>
+  body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+         text-rendering:optimizeLegibility; letter-spacing:-0.006em; }
+  h1,h2,h3,h4 { letter-spacing:-0.02em; }
+  h1 { line-height:1.15; } h2,h3 { line-height:1.25; } p { line-height:1.6; }
+
+  /* Soften default text from black to slate on LIGHT pages only */
+  body[class*="F8FAFC"] { color:#334155; }
+
+  /* Tabular figures so live counters/timers don't shift width */
+  .nums, [id^="stat-"], [id^="s-"], [id^="wd-countdown-"], [id^="countdown-"] {
+    font-variant-numeric: tabular-nums; font-feature-settings:"tnum";
+  }
+
+  /* One calm transition, scoped to interactive elements */
+  a, button, input, select, textarea, [role="button"] {
+    transition: color .2s ease, background-color .2s ease, border-color .2s ease,
+                box-shadow .2s ease, transform .2s ease;
+  }
+
+  /* Keyboard-only focus ring (brand-tinted); none on mouse click */
+  :focus { outline:none; }
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+    box-shadow: 0 0 0 3px rgba(0,122,195,.30); border-radius:10px;
+  }
+
+  /* Gentle press feedback */
+  button:active, [role="button"]:active { transform: translateY(1px); }
+
+  /* Respect reduced-motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { transition-duration:.01ms!important; animation-duration:.01ms!important; scroll-behavior:auto!important; }
+  }
+</style>
+</head>
+<body class="font-body text-slate-800 bg-slate-50 antialiased">
+
+    <nav id="navbar" class="fixed w-full z-50 bg-white/90 backdrop-blur-md border-b border-slate-200/60 transition-all duration-300">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-20">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-lg bg-adani-gradient flex items-center justify-center shadow-md">
+                        <i class="fa-solid fa-shield-halved text-white text-sm"></i>
+                    </div>
+                    <span class="font-heading font-bold text-xl text-navy-900 tracking-tight">IMS</span>
+                    <span class="hidden sm:block text-xs font-medium text-slate-400 border border-slate-200 rounded-full px-2 py-0.5">Enterprise</span>
+                </div>
+                <div class="hidden md:flex items-center space-x-1">
+                    <a href="dashboard.html" class="px-4 py-2 rounded-full text-navy-900 hover:bg-slate-100 font-medium transition text-sm">Dashboard</a>
+                    <a href="tickets.html"   class="px-4 py-2 rounded-full text-slate-600 hover:bg-slate-100 font-medium transition text-sm">Incidents</a>
+                    <a href="manager.html"   class="px-4 py-2 rounded-full text-slate-600 hover:bg-slate-100 font-medium transition text-sm">Manager</a>
+                    <a href="sla.html"       class="px-4 py-2 rounded-full text-slate-600 hover:bg-slate-100 font-medium transition text-sm">SLA</a>
+                    <a href="worker.html"    class="px-4 py-2 rounded-full text-slate-600 hover:bg-slate-100 font-medium transition text-sm">My Work</a>
+                    <a href="analytics.html" class="px-4 py-2 rounded-full text-slate-600 hover:bg-slate-100 font-medium transition text-sm">Analytics</a>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button id="basic-cta" onclick="window.location.href='login.html'" class="hidden md:inline-flex items-center justify-center px-6 py-2.5 text-sm font-semibold rounded-full text-white bg-navy-900 hover:bg-navy-800 shadow-lg shadow-navy-900/20 transition-all hover:-translate-y-0.5">
+                        Sign In <i class="fa-solid fa-arrow-right ml-2 text-xs"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- HERO -->
+    <section class="relative pt-32 pb-24 lg:pt-48 lg:pb-36 overflow-hidden min-h-screen flex items-center">
+        <div class="absolute inset-0 z-0">
+            <img src="https://images.unsplash.com/photo-1436491865332-7a61a109cc05?q=80&w=2074&auto=format&fit=crop" alt="Airport Operations" class="w-full h-full object-cover" />
+            <div class="absolute inset-0 bg-gradient-to-br from-navy-900/90 via-navy-900/80 to-brand-purple/60"></div>
+            <!-- subtle grid overlay -->
+            <div class="absolute inset-0 opacity-5" style="background-image: linear-gradient(rgba(255,255,255,0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.3) 1px, transparent 1px); background-size: 60px 60px;"></div>
+        </div>
+
+        <!-- Floating accent blobs -->
+        <div class="absolute top-1/3 left-1/4 w-96 h-96 bg-brand-blue/10 rounded-full blur-3xl pointer-events-none"></div>
+        <div class="absolute bottom-1/4 right-1/4 w-80 h-80 bg-brand-magenta/10 rounded-full blur-3xl pointer-events-none"></div>
+
+        <div class="relative z-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center text-center">
+            <!-- Eyebrow badge -->
+            <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-panel-light mb-8 border border-white/20">
+                <span class="w-2 h-2 rounded-full bg-emerald-400 live-dot"></span>
+                <span class="text-xs font-semibold text-white/80 uppercase tracking-widest">System Operational</span>
+            </div>
+
+            <h1 class="font-heading text-4xl md:text-6xl lg:text-7xl font-bold text-white leading-tight max-w-5xl mb-6">
+                Intelligent Incident Management<br class="hidden lg:block"> for <span class="text-transparent bg-clip-text bg-gradient-to-r from-sky-300 via-blue-300 to-violet-300">Safer Operations</span>
+            </h1>
+            <p class="mt-2 text-lg md:text-xl text-slate-300/90 max-w-2xl mb-12 leading-relaxed">
+                AI-powered reporting, automated categorization, SLA tracking, image analysis, and real-time escalation — built for enterprise safety teams.
+            </p>
+            
+            <div class="flex flex-col sm:flex-row gap-4 mb-16">
+                <button onclick="window.location.href='report.html'" class="group px-8 py-4 rounded-full text-white font-semibold bg-gradient-to-r from-brand-blue via-brand-purple to-brand-magenta hover:opacity-90 shadow-xl shadow-brand-purple/30 transition-all hover:-translate-y-1">
+                    Report Incident <i class="fa-solid fa-arrow-right ml-2 group-hover:translate-x-1 transition-transform"></i>
+                </button>
+                <button onclick="window.location.href='dashboard.html'" class="px-8 py-4 rounded-full text-white font-semibold glass-panel hover:bg-white/15 transition-all border border-white/20">
+                    <i class="fa-solid fa-gauge-high mr-2"></i> View Dashboard
+                </button>
+            </div>
+
+            <!-- Live Stats Bar -->
+            <div class="w-full max-w-4xl gradient-border rounded-2xl p-px">
+                <div class="bg-white/8 backdrop-blur-xl rounded-2xl p-7 md:p-8 grid grid-cols-2 md:grid-cols-4 gap-0 shadow-2xl" style="background: rgba(10,25,47,0.6);">
+                    <div class="px-6 py-2 border-r border-white/10 text-center">
+                        <p class="text-slate-400 text-xs font-semibold uppercase tracking-widest mb-2">Open Incidents</p>
+                        <p id="stat-open" class="font-heading text-4xl font-extrabold text-white">--</p>
+                    </div>
+                    <div class="px-6 py-2 border-r border-white/10 text-center">
+                        <p class="text-slate-400 text-xs font-semibold uppercase tracking-widest mb-2">Critical</p>
+                        <p id="stat-critical" class="font-heading text-4xl font-extrabold text-red-400">--</p>
+                    </div>
+                    <div class="px-6 py-2 border-r border-white/10 text-center">
+                        <p class="text-slate-400 text-xs font-semibold uppercase tracking-widest mb-2">SLA Breaches</p>
+                        <p id="stat-sla" class="font-heading text-4xl font-extrabold text-amber-400">--</p>
+                    </div>
+                    <div class="px-6 py-2 text-center">
+                        <p class="text-slate-400 text-xs font-semibold uppercase tracking-widest mb-2">Resolved Today</p>
+                        <p id="stat-resolved" class="font-heading text-4xl font-extrabold text-emerald-400">--</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Scroll hint -->
+        <div class="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-white/30 z-10">
+            <span class="text-xs uppercase tracking-widest font-medium">Scroll</span>
+            <div class="w-px h-8 bg-gradient-to-b from-white/30 to-transparent"></div>
+        </div>
+    </section>
+
+    <!-- QUICK ACTIONS -->
+    <section class="py-16 bg-white relative z-20 -mt-8 rounded-t-[2.5rem] shadow-[0_-4px_40px_-8px_rgba(10,25,47,0.12)]">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+            <!-- Section Label -->
+            <div class="flex items-center gap-4 mb-10">
+                <div class="h-px flex-1 bg-slate-100"></div>
+                <span class="text-xs font-bold uppercase tracking-widest text-slate-400 px-4">Command Center</span>
+                <div class="h-px flex-1 bg-slate-100"></div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <!-- Report Incident -->
+                <div onclick="window.location.href='report.html'" class="action-card group bg-white rounded-2xl p-7 shadow-soft border border-slate-200/60 cursor-pointer relative overflow-hidden">
+                    <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-blue-50 to-transparent rounded-bl-full"></div>
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-blue to-sky-400 flex items-center justify-center mb-5 shadow-lg shadow-blue-500/25 relative z-10">
+                        <i class="fa-solid fa-plus text-white text-lg"></i>
+                    </div>
+                    <h3 class="font-heading text-lg font-extrabold text-navy-900 mb-2 relative z-10">Report Incident</h3>
+                    <p class="text-slate-500 text-sm leading-relaxed relative z-10">Log a new safety, security, or equipment event with AI categorization.</p>
+                    <div class="mt-5 flex items-center gap-1 text-brand-blue text-xs font-semibold opacity-0 group-hover:opacity-100 transition-opacity relative z-10">
+                        Get started <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                    </div>
+                </div>
+
+                <!-- Track Existing -->
+                <div onclick="window.location.href='tickets.html'" class="action-card group bg-white rounded-2xl p-7 shadow-soft border border-slate-200/60 cursor-pointer relative overflow-hidden">
+                    <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-purple-50 to-transparent rounded-bl-full"></div>
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-purple to-violet-400 flex items-center justify-center mb-5 shadow-lg shadow-purple-500/25 relative z-10">
+                        <i class="fa-solid fa-shield-halved text-white text-lg"></i>
+                    </div>
+                    <h3 class="font-heading text-lg font-extrabold text-navy-900 mb-2 relative z-10">Track Existing</h3>
+                    <p class="text-slate-500 text-sm leading-relaxed relative z-10">Check status, SLA time, and assigned response personnel.</p>
+                    <div class="mt-5 flex items-center gap-1 text-brand-purple text-xs font-semibold opacity-0 group-hover:opacity-100 transition-opacity relative z-10">
+                        View incidents <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                    </div>
+                </div>
+
+                <!-- Analytics -->
+                <div onclick="window.location.href='analytics.html'" class="action-card group bg-white rounded-2xl p-7 shadow-soft border border-slate-200/60 cursor-pointer relative overflow-hidden">
+                    <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-pink-50 to-transparent rounded-bl-full"></div>
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-magenta to-rose-400 flex items-center justify-center mb-5 shadow-lg shadow-pink-500/25 relative z-10">
+                        <i class="fa-solid fa-chart-pie text-white text-lg"></i>
+                    </div>
+                    <h3 class="font-heading text-lg font-extrabold text-navy-900 mb-2 relative z-10">View Analytics</h3>
+                    <p class="text-slate-500 text-sm leading-relaxed relative z-10">Access command center trends and operational performance data.</p>
+                    <div class="mt-5 flex items-center gap-1 text-brand-magenta text-xs font-semibold opacity-0 group-hover:opacity-100 transition-opacity relative z-10">
+                        Explore data <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                    </div>
+                </div>
+
+                <!-- Emergency -->
+                <div onclick="window.location.href='emergency.html'" class="action-card group bg-white rounded-2xl p-7 shadow-soft border border-slate-200/60 border-l-[3px] border-l-red-500 cursor-pointer relative overflow-hidden">
+                    <div class="absolute top-0 right-0 w-32 h-32 bg-gradient-to-bl from-red-50 to-transparent rounded-bl-full"></div>
+                    <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-red-600 to-rose-500 flex items-center justify-center mb-5 shadow-lg shadow-red-500/30 relative z-10">
+                        <i class="fa-solid fa-triangle-exclamation text-white text-lg"></i>
+                    </div>
+                    <h3 class="font-heading text-lg font-extrabold text-navy-900 mb-2 relative z-10">Emergency Action</h3>
+                    <p class="text-slate-500 text-sm leading-relaxed relative z-10">Trigger immediate site-wide escalation and alert all response units.</p>
+                    <div class="mt-5 flex items-center gap-1 text-red-600 text-xs font-semibold opacity-0 group-hover:opacity-100 transition-opacity relative z-10">
+                        Activate now <i class="fa-solid fa-arrow-right text-[10px]"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Feature strip -->
+            <div class="mt-14 pt-10 border-t border-slate-100 grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+                <div>
+                    <div class="w-10 h-10 rounded-full bg-blue-50 text-brand-blue flex items-center justify-center mx-auto mb-3"><i class="fa-solid fa-robot text-sm"></i></div>
+                    <p class="text-sm font-bold text-navy-900">AI Categorization</p>
+                    <p class="text-xs text-slate-400 mt-1">Automatic routing & priority</p>
+                </div>
+                <div>
+                    <div class="w-10 h-10 rounded-full bg-purple-50 text-brand-purple flex items-center justify-center mx-auto mb-3"><i class="fa-solid fa-clock text-sm"></i></div>
+                    <p class="text-sm font-bold text-navy-900">SLA Tracking</p>
+                    <p class="text-xs text-slate-400 mt-1">Real-time deadline alerts</p>
+                </div>
+                <div>
+                    <div class="w-10 h-10 rounded-full bg-pink-50 text-brand-magenta flex items-center justify-center mx-auto mb-3"><i class="fa-solid fa-image text-sm"></i></div>
+                    <p class="text-sm font-bold text-navy-900">Image Analysis</p>
+                    <p class="text-xs text-slate-400 mt-1">Visual evidence processing</p>
+                </div>
+                <div>
+                    <div class="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-3"><i class="fa-solid fa-bell text-sm"></i></div>
+                    <p class="text-sm font-bold text-navy-900">Instant Escalation</p>
+                    <p class="text-xs text-slate-400 mt-1">Multi-channel notifications</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer class="bg-navy-900 pt-16 pb-8 border-t border-slate-800">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <div class="flex items-center justify-center gap-3 mb-4">
+                <div class="w-8 h-8 rounded-lg bg-adani-gradient flex items-center justify-center">
+                    <i class="fa-solid fa-shield-halved text-white text-sm"></i>
+                </div>
+                <span class="font-heading font-bold text-2xl text-white tracking-tight">IMS</span>
+            </div>
+            <p class="text-slate-400 text-sm">Enterprise-grade incident management, safeguarding operations worldwide.</p>
+            <div class="flex justify-center gap-6 mt-6 mb-6">
+                <a href="dashboard.html" class="text-slate-500 hover:text-white text-xs transition">Dashboard</a>
+                <a href="tickets.html" class="text-slate-500 hover:text-white text-xs transition">Incidents</a>
+                <a href="analytics.html" class="text-slate-500 hover:text-white text-xs transition">Analytics</a>
+                <a href="emergency.html" class="text-slate-500 hover:text-red-400 text-xs transition">Emergency</a>
+            </div>
+            <p class="text-slate-600 text-xs pt-6 border-t border-slate-800">© 2026 Incident Management System. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <script>
+        const API = 'http://localhost:8000';
+        async function loadStats() {
+            try {
+                const res = await fetch(`${API}/dashboard/stats`);
+                if (!res.ok) throw new Error('API not ready');
+                const data = await res.json();
+                document.getElementById('stat-open').textContent     = data.open     ?? '--';
+                document.getElementById('stat-critical').textContent = data.critical ?? '--';
+                document.getElementById('stat-sla').textContent      = String(data.sla_breaches ?? '--').padStart(2, '0');
+                document.getElementById('stat-resolved').textContent = data.resolved_today ?? '--';
+            } catch (e) {
+                console.warn('Dashboard stats unavailable:', e.message);
+            }
+        }
+        loadStats();
+        window.addEventListener('scroll', () => {
+            const nav = document.getElementById('navbar');
+            if (window.scrollY > 50) nav.classList.add('nav-scrolled');
+            else nav.classList.remove('nav-scrolled');
+        });
+    </script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        lucide.createIcons();
+
+        // Session-aware CTA: show dashboard link if signed in, else sign-in
+        (function () {
+            const btn = document.getElementById('basic-cta');
+            const t = localStorage.getItem('ims_token');
+            if (!btn || !t) return;
+            try {
+                const payload = JSON.parse(atob(t.split('.')[1]));
+                if (payload.exp && payload.exp * 1000 > Date.now()) {
+                    btn.innerHTML = 'Open Dashboard <i class="fa-solid fa-arrow-right ml-2 text-xs"></i>';
+                    btn.onclick = () => window.location.href = 'dashboard.html';
+                }
+            } catch (e) { /* stay as sign-in */ }
+        })();
+    </script>
+</body>
+</html>

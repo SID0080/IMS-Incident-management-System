@@ -1,0 +1,1330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+    // ── Per-tab session isolation ─────────────────────────────
+    // sessionStorage is scoped to a single tab, so different tabs can be
+    // signed in as different users at the same time — useful for demos.
+    // We shim just the two IMS auth keys; everything else on localStorage
+    // still works normally.
+    (function () {
+        const KEYS = new Set(['ims_token', 'ims_user']);
+        const _get = localStorage.getItem.bind(localStorage);
+        const _set = localStorage.setItem.bind(localStorage);
+        const _del = localStorage.removeItem.bind(localStorage);
+        localStorage.getItem    = k => KEYS.has(k) ? sessionStorage.getItem(k)      : _get(k);
+        localStorage.setItem    = (k, v) => KEYS.has(k) ? sessionStorage.setItem(k, v) : _set(k, v);
+        localStorage.removeItem = k => KEYS.has(k) ? sessionStorage.removeItem(k)   : _del(k);
+    })();
+</script>
+
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMS | Manager Console</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { heading:['Outfit','sans-serif'], body:['Inter','sans-serif'] },
+    colors: {
+      navy:  { 900:'#0A192F', 800:'#112240', 700:'#1C3454' },
+      brand: { blue:'#007AC3', purple:'#6A2A88', magenta:'#B8205C' },
+      ink:   { DEFAULT:'#0F172A', soft:'#334155', muted:'#64748B', faint:'#94A3B8' }
+    },
+    backgroundImage: { 'adani-gradient':'linear-gradient(to right,#007AC3,#6A2A88,#B8205C)' },
+    boxShadow: {
+      'soft-xs':'0 1px 2px rgba(10,25,47,.04)',
+      'soft':'0 1px 3px rgba(10,25,47,.05), 0 4px 12px -2px rgba(10,25,47,.05)',
+      'soft-md':'0 4px 6px -1px rgba(10,25,47,.05), 0 10px 24px -4px rgba(10,25,47,.06)',
+      'soft-lg':'0 8px 16px -4px rgba(10,25,47,.06), 0 24px 48px -8px rgba(10,25,47,.08)'
+    }
+  }}
+}
+</script>
+    <style>
+        .ticket-card { transition: all 0.2s; border: 2px solid transparent; cursor: pointer; }
+        .ticket-card:hover { transform: translateY(-1px); box-shadow: 0 6px 24px -4px rgba(10,25,47,0.1); }
+        .ticket-card.selected { border-color: #007AC3; background: #EFF8FF; }
+        .ticket-card.selected-critical { border-color: #dc2626; background: #FFF5F5; }
+        .worker-card { transition: all 0.2s; border: 2px solid transparent; cursor: pointer; }
+        .worker-card:hover:not(.blacklisted) { transform: translateY(-1px); box-shadow: 0 6px 24px -4px rgba(10,25,47,0.1); }
+        .worker-card.selected { border-color: #007AC3; background: #EFF8FF; }
+        .worker-card.blacklisted { opacity: 0.45; cursor: not-allowed; }
+        .assign-bar { transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+        .assign-bar.hidden-bar { transform: translateY(100px); opacity: 0; pointer-events: none; }
+        #toast { transition: all 0.3s; }
+        .load-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .tab-btn.active { background: #0A192F; color: white; }
+        .tab-btn { transition: all 0.15s; }
+    </style>
+<style data-ui-upgrade>
+  body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+         text-rendering:optimizeLegibility; letter-spacing:-0.006em; }
+  h1,h2,h3,h4 { letter-spacing:-0.02em; }
+  h1 { line-height:1.15; } h2,h3 { line-height:1.25; } p { line-height:1.6; }
+
+  /* Soften default text from black to slate on LIGHT pages only */
+  body[class*="F8FAFC"] { color:#334155; }
+
+  /* Tabular figures so live counters/timers don't shift width */
+  .nums, [id^="stat-"], [id^="s-"], [id^="wd-countdown-"], [id^="countdown-"] {
+    font-variant-numeric: tabular-nums; font-feature-settings:"tnum";
+  }
+
+  /* One calm transition, scoped to interactive elements */
+  a, button, input, select, textarea, [role="button"] {
+    transition: color .2s ease, background-color .2s ease, border-color .2s ease,
+                box-shadow .2s ease, transform .2s ease;
+  }
+
+  /* Keyboard-only focus ring (brand-tinted); none on mouse click */
+  :focus { outline:none; }
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+    box-shadow: 0 0 0 3px rgba(0,122,195,.30); border-radius:10px;
+  }
+
+  /* Gentle press feedback */
+  button:active, [role="button"]:active { transform: translateY(1px); }
+
+  /* Respect reduced-motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { transition-duration:.01ms!important; animation-duration:.01ms!important; scroll-behavior:auto!important; }
+  }
+</style>
+<style data-qol-polish>
+  /* Slim, calm scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; border: 2px solid transparent; background-clip: content-box; }
+
+  /* Content gently fades in on load */
+  @keyframes qol-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  main { animation: qol-fade-up .35s ease-out; }
+
+  /* Cards lift slightly on hover (scoped to existing rounded cards) */
+  .shadow-soft { transition: box-shadow .2s ease, transform .2s ease; }
+  .shadow-soft:hover { box-shadow: 0 6px 14px -2px rgba(10,25,47,.08), 0 16px 32px -8px rgba(10,25,47,.09); }
+
+  /* Table rows get a subtle left accent on hover */
+  tbody tr { transition: background-color .15s ease, box-shadow .15s ease; }
+  tbody tr:hover { box-shadow: inset 3px 0 0 #007AC3; }
+
+  @media (prefers-reduced-motion: reduce) { main { animation: none; } }
+</style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script>
+    // ── Auth guard (runs before any other script on this page) ─────
+    (function () {
+        const token = localStorage.getItem('ims_token');
+        const userStr = localStorage.getItem('ims_user');
+
+        if (!token || !userStr) {
+            window.location.replace('login.html');
+            return;
+        }
+
+        // JWT expiry check — decode the payload without needing a library
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if (payload.exp && payload.exp * 1000 < Date.now()) {
+                localStorage.removeItem('ims_token');
+                localStorage.removeItem('ims_user');
+                window.location.replace('login.html?expired=1');
+                return;
+            }
+        } catch (e) {
+            // Malformed token → force re-login
+            localStorage.removeItem('ims_token');
+            localStorage.removeItem('ims_user');
+            window.location.replace('login.html');
+            return;
+        }
+
+        // Role gate — set inside each page's script tag via <body data-requires-role="MANAGER,ADMIN">
+        const user = JSON.parse(userStr);
+        const requires = document.body.getAttribute('data-requires-role');
+        if (requires) {
+            const allowed = requires.split(',').map(s => s.trim());
+            if (!allowed.includes(user.role)) {
+                window.location.replace('dashboard.html?denied=1');
+                return;
+            }
+        }
+    })();
+</script>
+</head>
+<body class="font-body bg-[#F8FAFC] antialiased">
+
+    <!-- Nav -->
+    <nav class="fixed w-full z-50 bg-white/90 backdrop-blur-lg border-b border-slate-200/50 shadow-soft">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
+            <a href="basic.html" class="flex items-center gap-2.5">
+                <div class="w-7 h-7 rounded-md bg-adani-gradient flex items-center justify-center shadow-soft">
+                    <i class="fa-solid fa-shield-halved text-white text-xs"></i>
+                </div>
+                <span class="font-heading font-bold text-xl text-navy-900">IMS</span>
+            </a>
+            <div class="flex items-center gap-1">
+                <a href="dashboard.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Dashboard</a>
+                <a href="tickets.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Incidents</a>
+                <a href="manager.html" class="px-4 py-2 rounded-full text-sm font-bold text-brand-blue">Manager</a>
+                <a href="sla.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">SLA</a>
+                <a href="worker.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">My Work</a>
+                <a href="analytics.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Analytics</a>
+                <button onclick="window.location.href='report.html'" class="ml-2 px-5 py-2 rounded-full text-white text-sm font-semibold bg-navy-900 hover:bg-navy-800 transition shadow-md shadow-navy-900/20 hover:-translate-y-0.5">
+                    <i class="fa-solid fa-plus mr-1.5 text-xs"></i>Report
+                </button>
+                <div class="ml-3 flex items-center gap-2 pl-3 border-l border-slate-200">
+                    <span id="nav-user" class="hidden sm:inline text-xs text-slate-500 font-medium max-w-[110px] truncate"></span>
+                    <button onclick="if (confirm('Sign out?')) { localStorage.removeItem('ims_token'); localStorage.removeItem('ims_user'); window.location.href='login.html'; }"
+                            class="w-8 h-8 rounded-full text-slate-500 hover:text-red-600 hover:bg-red-50 transition flex items-center justify-center" title="Sign out">
+                        <i class="fa-solid fa-right-from-bracket text-xs"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Toast -->
+    <div id="toast" class="fixed top-20 right-6 z-[100] px-5 py-3.5 rounded-2xl shadow-xl text-sm font-semibold flex items-center gap-2.5 opacity-0 pointer-events-none">
+        <i id="toast-icon" class="text-base"></i>
+        <span id="toast-msg"></span>
+    </div>
+
+    <main class="pt-28 pb-32 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <!-- Page header -->
+        <div class="mb-8 flex justify-between items-end">
+            <div>
+                <p class="text-xs font-semibold text-brand-blue uppercase tracking-widest mb-1">Manager Console</p>
+                <h1 class="font-heading text-3xl font-extrabold text-navy-900">Ticket Assignment</h1>
+                <p class="text-slate-400 text-sm mt-1.5">Assign Critical & High priority incidents to available workers</p>
+            </div>
+            <button onclick="loadAll()" class="text-sm bg-white border border-slate-200 px-4 py-2 rounded-xl text-slate-600 hover:text-brand-blue hover:border-brand-blue transition shadow-soft flex items-center gap-2">
+                <i class="fa-solid fa-rotate-right"></i> Refresh
+            </button>
+        </div>
+
+        <!-- Summary Pills -->
+        <div class="flex flex-wrap gap-3 mb-8">
+            <div class="flex items-center gap-2 bg-red-50 border border-red-200 rounded-full px-4 py-2">
+                <span class="w-2 h-2 rounded-full bg-red-500"></span>
+                <span class="text-red-700 text-sm font-semibold"><span id="pill-critical">--</span> Unassigned Critical</span>
+            </div>
+            <div class="flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-full px-4 py-2">
+                <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+                <span class="text-orange-700 text-sm font-semibold"><span id="pill-high">--</span> Unassigned High</span>
+            </div>
+            <div class="flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-full px-4 py-2">
+                <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+                <span class="text-emerald-700 text-sm font-semibold"><span id="pill-workers">--</span> Workers Available</span>
+            </div>
+            <div class="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-full px-4 py-2">
+                <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+                <span class="text-amber-700 text-sm font-semibold"><span id="pill-blacklisted">--</span> Blacklisted</span>
+            </div>
+            <div class="flex items-center gap-2 bg-red-50 border border-red-200 rounded-full px-4 py-2 cursor-pointer hover:bg-red-100 transition" onclick="setTab('breached', event); document.getElementById('tab-breached-btn').click()">
+                <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                <span class="text-red-700 text-sm font-semibold"><span id="pill-breached">0</span> SLA Breached</span>
+            </div>
+        </div>
+
+        <!-- Two-panel layout -->
+        <div class="grid grid-cols-1 lg:grid-cols-5 gap-6 mb-8">
+
+            <!-- Left: Open tickets -->
+            <div class="lg:col-span-3 bg-white rounded-3xl shadow-soft border border-slate-200/50 overflow-hidden flex flex-col">
+                <div class="px-6 py-5 border-b border-slate-100 flex justify-between items-center flex-wrap gap-3">
+                    <div>
+                        <h2 class="font-heading text-base font-bold text-navy-900">Pending Assignment</h2>
+                        <p class="text-xs text-slate-400 mt-0.5">Critical & High tickets awaiting a worker</p>
+                    </div>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <select id="ticket-terminal-filter" onchange="renderTickets()"
+                            class="text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-blue/30">
+                            <option value="">All Terminals</option>
+                            <option value="T2">T2</option>
+                            <option value="T3">T3</option>
+                        </select>
+                        <div class="flex gap-1 bg-slate-100 rounded-xl p-1">
+                            <button class="tab-btn active text-xs font-semibold px-3 py-1.5 rounded-lg" onclick="setTab('all', event)">All</button>
+                            <button class="tab-btn text-xs font-semibold px-3 py-1.5 rounded-lg text-slate-500" onclick="setTab('critical', event)">Critical</button>
+                            <button class="tab-btn text-xs font-semibold px-3 py-1.5 rounded-lg text-slate-500" onclick="setTab('high', event)">High</button>
+                            <button class="tab-btn text-xs font-semibold px-3 py-1.5 rounded-lg text-amber-500" onclick="setTab('uncategorized', event)">⚠️ Uncategorized <span id="uncategorized-count" class="hidden ml-1 bg-amber-100 text-amber-600 px-1.5 rounded-full text-[9px] font-bold"></span></button>
+                            <button id="tab-breached-btn" class="tab-btn text-xs font-semibold px-3 py-1.5 rounded-lg text-red-500" onclick="setTab('breached', event)">🔴 Breached <span id="breached-count" class="hidden ml-1 bg-red-100 text-red-600 px-1.5 rounded-full text-[9px] font-bold"></span></button>
+                        </div>
+                    </div>
+                </div>
+                <div id="tickets-list" class="flex-1 overflow-y-auto max-h-[480px] p-4 space-y-3">
+                    <div class="text-center py-12 text-slate-400">
+                        <i class="fa-solid fa-circle-notch fa-spin text-2xl mb-3 block text-brand-blue/40"></i>
+                        <p class="text-sm">Loading tickets...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right: Workers -->
+            <div class="lg:col-span-2 bg-white rounded-3xl shadow-soft border border-slate-200/50 overflow-hidden flex flex-col">
+                <div class="px-6 py-5 border-b border-slate-100">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <h2 class="font-heading text-base font-bold text-navy-900">Workers</h2>
+                            <p class="text-xs text-slate-400 mt-0.5">Select a worker to assign the ticket</p>
+                        </div>
+                        <select id="worker-dept-filter" onchange="renderWorkers()"
+                            class="text-xs font-semibold px-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-600 cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-blue/30 hover:border-brand-blue transition appearance-none pr-7"
+                            style="background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath fill='%2394a3b8' d='M5 7L1 2h8z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;">
+                            <option value="">All Departments</option>
+                            <option value="it">IT</option>
+                            <option value="security">Security</option>
+                            <option value="hr">HR</option>
+                            <option value="technical_operations">Technical Operations</option>
+                            <option value="marketing">Marketing</option>
+                            <option value="legal">Legal</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="workers-list" class="flex-1 overflow-y-auto max-h-[480px] p-4 space-y-3">
+                    <div class="text-center py-12 text-slate-400">
+                        <i class="fa-solid fa-circle-notch fa-spin text-2xl mb-3 block text-brand-blue/40"></i>
+                        <p class="text-sm">Loading workers...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Worker Accountability Table -->
+        <div class="bg-white rounded-3xl shadow-soft border border-slate-200/50 overflow-hidden">
+            <div class="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                    <h2 class="font-heading text-base font-bold text-navy-900">Worker Accountability</h2>
+                    <p class="text-xs text-slate-400 mt-0.5">Penalty points and blacklist status</p>
+                </div>
+                <a href="#" onclick="clearBlacklist(event)" class="hidden text-xs font-semibold text-red-600 hover:text-red-700 border border-red-200 px-3 py-1.5 rounded-lg" id="clear-btn">Clear Selected Blacklist</a>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-slate-50/60 border-b border-slate-100">
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Worker</th>
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Department</th>
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Level</th>
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Active Load</th>
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Penalty Pts</th>
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Breaches</th>
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Status</th>
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="accountability-table">
+                        <tr><td colspan="8" class="px-6 py-10 text-center text-slate-400 text-sm">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <!-- Fixed assign bar -->
+    <div id="assign-bar" class="assign-bar hidden-bar fixed bottom-0 left-0 right-0 z-50 bg-navy-900 border-t-2 border-brand-blue/40 shadow-2xl">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between gap-4">
+            <div class="flex items-center gap-4 min-w-0">
+                <div class="flex-shrink-0 w-10 h-10 rounded-xl bg-brand-blue/20 flex items-center justify-center">
+                    <i class="fa-solid fa-link text-brand-blue text-sm"></i>
+                </div>
+                <div class="min-w-0">
+                    <p class="text-white text-sm font-semibold truncate">
+                        <span id="bar-ticket" class="text-slate-300">No ticket selected</span>
+                        <span class="mx-2 text-slate-600">→</span>
+                        <span id="bar-worker" class="text-slate-300">No worker selected</span>
+                    </p>
+                    <p id="bar-action-hint" class="text-slate-500 text-xs mt-0.5">Click Assign to confirm this assignment</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-3 flex-shrink-0">
+                <button onclick="clearSelection()" class="px-4 py-2.5 rounded-xl text-slate-400 text-sm font-medium hover:text-white hover:bg-white/10 transition">
+                    Cancel
+                </button>
+                <button id="assign-btn" onclick="assignTicket()" disabled
+                    class="px-6 py-2.5 rounded-xl bg-brand-blue text-white text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:bg-blue-600 transition shadow-lg shadow-brand-blue/30">
+                    <i class="fa-solid fa-check mr-1.5"></i> Assign Ticket
+                </button>
+            </div>
+        </div>
+    </div>
+
+<script>
+const API = 'http://localhost:8000';
+const token = localStorage.getItem('ims_token');
+const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+let allOpenTickets = [];
+let allUncategorizedTickets = [];   // any priority, category is null
+const IMS_USER = JSON.parse(localStorage.getItem('ims_user') || '{}');
+let allBreachedTickets = [];   // critical_review tickets
+let allWorkers = [];
+let workerLoad    = {}; // worker_id → active ticket count
+let workerTickets = {}; // worker_id → [{id, title, priority, status, is_paused}]
+let activeTab = 'all';
+let selectedTicket = null;
+let selectedWorker = null;
+
+const DEPT_COLORS = {
+    electrical: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+    mechanical:  'bg-blue-50 text-blue-700 border-blue-200',
+    fire:        'bg-red-50 text-red-700 border-red-200',
+    chemical:    'bg-purple-50 text-purple-700 border-purple-200',
+    structural:  'bg-slate-50 text-slate-700 border-slate-200',
+    medical:     'bg-emerald-50 text-emerald-700 border-emerald-200',
+    security:    'bg-indigo-50 text-indigo-700 border-indigo-200',
+    general:     'bg-gray-50 text-gray-700 border-gray-200',
+};
+
+async function loadAll() {
+    try {
+        const [ticketsRes, workersRes, inProgRes, breachedRes] = await Promise.all([
+            fetch(`${API}/tickets?status=open&limit=200`, { headers }),
+            fetch(`${API}/admin/workers`, { headers }),
+            fetch(`${API}/tickets?status=in_progress&limit=500`, { headers }),
+            fetch(`${API}/tickets?status=critical_review&limit=200`, { headers }),
+        ]);
+
+        if (ticketsRes.ok) {
+            const all = await ticketsRes.json();
+            allOpenTickets = all.filter(t => t.priority === 'critical' || t.priority === 'high');
+            // Uncategorized — ANY priority, since these are otherwise invisible
+            // (they don't show in the Critical/High pending panel, and a
+            // manager has no other way to spot them without this tab)
+            allUncategorizedTickets = all.filter(t => !t.category);
+            const uncatBadge = document.getElementById('uncategorized-count');
+            if (uncatBadge) {
+                if (allUncategorizedTickets.length > 0) {
+                    uncatBadge.textContent = allUncategorizedTickets.length;
+                    uncatBadge.classList.remove('hidden');
+                } else {
+                    uncatBadge.classList.add('hidden');
+                }
+            }
+        }
+        if (breachedRes.ok) {
+            allBreachedTickets = await breachedRes.json();
+            // Update breached badge
+            const badge = document.getElementById('breached-count');
+            if (allBreachedTickets.length > 0) {
+                badge.textContent = allBreachedTickets.length;
+                badge.classList.remove('hidden');
+                document.getElementById('tab-breached-btn').classList.add('text-red-500');
+            }
+        }
+        if (workersRes.ok) allWorkers = await workersRes.json();
+        if (inProgRes.ok) {
+            const inProg = await inProgRes.json();
+            workerLoad    = {};
+            workerTickets = {};
+            inProg.forEach(t => {
+                // Primary assignee
+                if (t.assignee_id) {
+                    workerLoad[t.assignee_id] = (workerLoad[t.assignee_id] || 0) + 1;
+                    if (!workerTickets[t.assignee_id]) workerTickets[t.assignee_id] = [];
+                    workerTickets[t.assignee_id].push({
+                        id: t.id, title: t.title,
+                        priority: t.priority, status: t.status,
+                        is_paused: t.is_paused || false,
+                    });
+                }
+                // Additional assignees (CRITICAL/HIGH multi-worker)
+                if (t.additional_assignee_ids) {
+                    try {
+                        const extras = JSON.parse(t.additional_assignee_ids);
+                        extras.forEach(wid => {
+                            workerLoad[wid] = (workerLoad[wid] || 0) + 1;
+                            if (!workerTickets[wid]) workerTickets[wid] = [];
+                            workerTickets[wid].push({
+                                id: t.id, title: t.title,
+                                priority: t.priority, status: t.status,
+                                is_paused: t.is_paused || false,
+                            });
+                        });
+                    } catch(e) {}
+                }
+            });
+        }
+
+        updatePills();
+        renderTickets();
+        renderWorkers();
+        renderAccountability();
+    } catch(e) {
+        showToast('Cannot reach server', 'error');
+    }
+}
+
+function updatePills() {
+    const critical = allOpenTickets.filter(t => t.priority === 'critical' && !t.assignee_id).length;
+    const high     = allOpenTickets.filter(t => t.priority === 'high' && !t.assignee_id).length;
+    const available = allWorkers.filter(w => !w.is_blacklisted).length;
+    const blacklisted = allWorkers.filter(w => w.is_blacklisted).length;
+    document.getElementById('pill-critical').textContent = critical;
+    document.getElementById('pill-high').textContent = high;
+    document.getElementById('pill-workers').textContent = available;
+    document.getElementById('pill-blacklisted').textContent = blacklisted;
+    // Update breached pill if present
+    const breachedPill = document.getElementById('pill-breached');
+    if (breachedPill) breachedPill.textContent = allBreachedTickets.length;
+}
+
+function setTab(tab, evt) {
+    activeTab = tab;
+    document.querySelectorAll('.tab-btn').forEach(b => {
+        b.classList.remove('active');
+        b.classList.add('text-slate-500');
+    });
+    if (evt && evt.target) {
+        evt.target.classList.add('active');
+        evt.target.classList.remove('text-slate-500');
+    }
+    if (tab === 'breached') {
+        renderBreachedTickets();
+    } else if (tab === 'uncategorized') {
+        renderUncategorizedTickets();
+    } else {
+        renderTickets();
+    }
+}
+
+function renderTickets() {
+    if (activeTab === 'breached') { renderBreachedTickets(); return; }
+    if (activeTab === 'uncategorized') { renderUncategorizedTickets(); return; }
+    let tickets = allOpenTickets;
+    if (activeTab === 'critical') tickets = tickets.filter(t => t.priority === 'critical');
+    if (activeTab === 'high')     tickets = tickets.filter(t => t.priority === 'high');
+    const termFilter = document.getElementById('ticket-terminal-filter')?.value || '';
+    if (termFilter) tickets = tickets.filter(t => t.terminal === termFilter);
+
+    const el = document.getElementById('tickets-list');
+    if (!tickets.length) {
+        el.innerHTML = `<div class="text-center py-12 text-slate-400">
+            <i class="fa-solid fa-circle-check text-3xl mb-3 block text-emerald-400/60"></i>
+            <p class="text-sm font-medium">No pending ${activeTab === 'all' ? '' : activeTab} tickets</p>
+            <p class="text-xs mt-1">All caught up!</p>
+        </div>`;
+        return;
+    }
+
+    el.innerHTML = tickets.map(t => {
+        const isSelected = selectedTicket?.id === t.id;
+        const isCrit = t.priority === 'critical';
+        const age = Math.round((Date.now() - new Date(t.created_at)) / 3600000);
+        return `
+        <div class="ticket-card rounded-2xl p-4 bg-slate-50 border-2 ${isSelected ? (isCrit ? 'selected-critical' : 'selected') : 'border-transparent'}"
+             onclick="selectTicket('${t.id}')">
+            <div class="flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1.5">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${isCrit ? 'bg-red-100 text-red-600 border border-red-200' : 'bg-orange-100 text-orange-600 border border-orange-200'}">
+                            ${t.priority}
+                        </span>
+                        ${t.ticket_number ? `<span class="font-mono text-[10px] font-bold text-slate-500">#${t.ticket_number}</span>` : ''}
+                        ${t.category ? `<span class="text-[10px] text-slate-400 font-medium">${formatCategory(t.category)}</span>` : ''}
+                        ${t.terminal ? `<span class="text-[10px] px-1.5 py-0.5 rounded-md bg-blue-50 text-brand-blue font-bold ml-1">${t.terminal}</span>` : ''}
+                    </div>
+                    <p class="text-navy-900 font-semibold text-sm truncate">${t.title}</p>
+                    <p class="text-slate-400 text-xs mt-1 line-clamp-1">${t.description}</p>
+                </div>
+                <div class="flex-shrink-0 text-right">
+                    <p class="text-xs text-slate-400">${age}h ago</p>
+                    ${isSelected ? `<i class="fa-solid fa-circle-check text-brand-blue mt-1 block text-right"></i>` : ''}
+                </div>
+            </div>
+            ${t.location ? `<div class="mt-2 flex items-center gap-1 text-xs text-slate-400"><i class="fa-solid fa-location-dot text-slate-300"></i>${t.location}</div>` : ''}
+        </div>`;
+    }).join('');
+}
+
+function renderWorkers() {
+    const el = document.getElementById('workers-list');
+    if (!allWorkers.length) {
+        el.innerHTML = `<div class="text-center py-12 text-slate-400 text-sm">No workers found.</div>`;
+        return;
+    }
+
+    // Apply department filter
+    const deptFilter = (document.getElementById('worker-dept-filter')?.value || '').trim();
+    const workers = deptFilter
+        ? allWorkers.filter(w => w.department === deptFilter)
+        : allWorkers;
+
+    if (!workers.length) {
+        el.innerHTML = `<div class="text-center py-12 text-slate-400 text-sm">
+            <i class="fa-solid fa-filter text-xl mb-2 block opacity-40"></i>
+            No workers in this department.</div>`;
+        return;
+    }
+
+    el.innerHTML = workers.map(w => {
+        const isSelected = selectedWorker?.id === w.id;
+        const load = workerLoad[w.id] || 0;
+        const deptClass = DEPT_COLORS[w.department] || 'bg-slate-50 text-slate-600 border-slate-200';
+        const pointsColor = w.penalty_points >= 20 ? 'text-red-600' : w.penalty_points >= 10 ? 'text-amber-600' : 'text-slate-500';
+
+        return `
+        <div class="worker-card rounded-2xl p-4 bg-slate-50 border-2 ${w.is_blacklisted ? 'blacklisted border-transparent' : isSelected ? 'selected' : 'border-transparent'}"
+             onclick="${w.is_blacklisted ? '' : `selectWorker('${w.id}')`}">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-xl bg-navy-900 flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-sm font-bold">${w.full_name.charAt(0)}</span>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2">
+                        <p class="text-navy-900 font-semibold text-sm truncate">${w.full_name}</p>
+                        ${w.is_blacklisted ? `<span class="px-1.5 py-0.5 bg-red-100 text-red-600 text-[9px] font-bold rounded-md uppercase">Blacklisted</span>` : ''}
+                    </div>
+                    <div class="flex items-center gap-2 mt-1">
+                        ${w.department ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold border ${deptClass}">${formatCategory(w.department)}</span>` : '<span class="text-[10px] text-slate-300">No dept</span>'}
+                    </div>
+                </div>
+                ${isSelected ? `<i class="fa-solid fa-circle-check text-brand-blue flex-shrink-0"></i>` : ''}
+            </div>
+            <div class="flex items-center justify-between mt-3 pt-3 border-t border-slate-200/60">
+                <div class="flex items-center gap-1.5">
+                    <span class="text-xs text-slate-400">Load:</span>
+                    <div class="flex gap-1 items-center relative">
+                        ${(workerTickets[w.id] || []).length === 0
+                            ? `<span class="text-[10px] text-emerald-600 font-semibold bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">Free</span>`
+                            : (workerTickets[w.id] || []).slice(0,5).map((t, i) => `
+                                <span class="load-dot cursor-pointer relative group"
+                                      style="background:${t.is_paused ? '#f59e0b' : '#007AC3'}"
+                                      onmouseenter="showDotTooltip(event, '${t.id}', '${t.priority}', '${t.title.replace(/'/g, '\\').replace(/"/g, '&quot;').substring(0,60)}', ${t.is_paused || false})"
+                                      onmouseleave="hideDotTooltip()">
+                                </span>`).join('')
+                        }
+                    </div>
+                    ${load > 0 ? `<span class="text-xs text-slate-400">${load} active</span>` : ''}
+                </div>
+                ${w.penalty_points > 0
+                    ? `<span class="text-xs ${pointsColor} font-semibold">${w.penalty_points} pts</span>`
+                    : `<span class="text-xs text-emerald-500 font-semibold">0 pts</span>`
+                }
+                <button onclick="loadWorkerPerformance('${w.id}', '${w.full_name.replace(/'/g,"\\'")}')"
+                    class="text-[10px] font-semibold text-slate-400 hover:text-brand-blue transition ml-auto">
+                    View Performance →
+                </button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+function renderAccountability() {
+    const el = document.getElementById('accountability-table');
+    if (!allWorkers.length) {
+        el.innerHTML = `<tr><td colspan="8" class="px-6 py-10 text-center text-slate-400 text-sm">No workers found.</td></tr>`;
+        return;
+    }
+
+    el.innerHTML = allWorkers.map(w => {
+        const load = workerLoad[w.id] || 0;
+        const deptClass = DEPT_COLORS[w.department] || 'bg-slate-50 text-slate-600 border-slate-200';
+        const ptsColor = w.penalty_points >= 20 ? 'text-red-600 font-bold' : w.penalty_points >= 10 ? 'text-amber-600 font-semibold' : 'text-slate-600';
+        const statusBadge = w.is_blacklisted
+            ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-red-100 text-red-600 border border-red-200 uppercase">Blacklisted</span>`
+            : `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-600 border border-emerald-200 uppercase">Active</span>`;
+        const actionBtn = w.is_blacklisted
+            ? `<button onclick="confirmClearBlacklist('${w.id}', '${w.full_name}')"
+                class="text-xs text-red-600 hover:text-white hover:bg-red-600 border border-red-200 px-3 py-1.5 rounded-lg transition font-semibold">
+                Clear</button>`
+            : `<span class="text-xs text-slate-300">—</span>`;
+
+        return `<tr class="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+            <td class="px-6 py-4">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-7 h-7 rounded-lg bg-navy-900 flex items-center justify-center">
+                        <span class="text-white text-xs font-bold">${w.full_name.charAt(0)}</span>
+                    </div>
+                    <div>
+                        <p class="font-semibold text-navy-900 text-sm">${w.full_name}</p>
+                        <p class="text-slate-400 text-xs">${w.email}</p>
+                    </div>
+                </div>
+            </td>
+            <td class="px-6 py-4">
+                ${w.department ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-semibold border ${deptClass}">${w.department}</span>` : '<span class="text-xs text-slate-300">—</span>'}
+            </td>
+            <td class="px-6 py-4">
+                ${IMS_USER.role === 'ADMIN'
+                    ? `<select onchange="setWorkerLevel('${w.id}', this.value, '${w.full_name.replace(/'/g,"\\'")}')" onclick="event.stopPropagation()"
+                          class="text-xs font-bold border border-slate-200 rounded-lg px-2 py-1 bg-slate-50 text-navy-900">
+                          <option value="" ${!w.level ? 'selected' : ''} disabled>—</option>
+                          <option value="L1" ${w.level === 'L1' ? 'selected' : ''}>L1</option>
+                          <option value="L2" ${w.level === 'L2' ? 'selected' : ''}>L2</option>
+                          <option value="L3" ${w.level === 'L3' ? 'selected' : ''}>L3</option>
+                       </select>`
+                    : (w.level
+                        ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold border bg-indigo-50 text-indigo-600 border-indigo-200">${w.level}</span>`
+                        : '<span class="text-xs text-slate-300">—</span>')}
+            </td>
+            <td class="px-6 py-4 text-sm text-slate-600">${load} ticket${load !== 1 ? 's' : ''}</td>
+            <td class="px-6 py-4 text-sm ${ptsColor}">${w.penalty_points}</td>
+            <td class="px-6 py-4 text-sm text-slate-600">${w.breach_count}</td>
+            <td class="px-6 py-4">${statusBadge}</td>
+            <td class="px-6 py-4">${actionBtn}</td>
+        </tr>`;
+    }).join('');
+}
+
+function selectTicket(id, fromBreached = false) {
+    if (fromBreached) {
+        selectedTicket = allBreachedTickets.find(t => t.id === id) || null;
+        renderBreachedTickets();
+    } else {
+        selectedTicket = allOpenTickets.find(t => t.id === id) || null;
+        renderTickets();
+    }
+    updateAssignBar();
+}
+
+function selectWorker(id) {
+    selectedWorker = allWorkers.find(w => w.id === id) || null;
+    renderWorkers();
+    updateAssignBar();
+}
+
+function updateAssignBar() {
+    const bar = document.getElementById('assign-bar');
+    const btn = document.getElementById('assign-btn');
+    const barTicket = document.getElementById('bar-ticket');
+    const barWorker = document.getElementById('bar-worker');
+
+    barTicket.textContent = selectedTicket ? selectedTicket.title : 'No ticket selected';
+    barWorker.textContent = selectedWorker ? selectedWorker.full_name : 'No worker selected';
+
+    barTicket.className = selectedTicket ? 'text-white font-semibold' : 'text-slate-500';
+    barWorker.className = selectedWorker ? 'text-brand-blue font-semibold' : 'text-slate-500';
+
+    const ready = selectedTicket && selectedWorker;
+    btn.disabled = !ready;
+
+    if (selectedTicket || selectedWorker) {
+        bar.classList.remove('hidden-bar');
+    } else {
+        bar.classList.add('hidden-bar');
+    }
+}
+
+function clearSelection() {
+    selectedTicket = null;
+    selectedWorker = null;
+    renderTickets();
+    renderWorkers();
+    updateAssignBar();
+}
+
+async function assignTicket() {
+    if (!selectedTicket || !selectedWorker) return;
+    const btn = document.getElementById('assign-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-1.5"></i> Assigning...';
+
+    try {
+        const res = await fetch(`${API}/tickets/${selectedTicket.id}/assign`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({ assignee_id: selectedWorker.id }),
+        });
+
+        if (res.ok) {
+            showToast(`Assigned to ${selectedWorker.full_name}`, 'success');
+            clearSelection();
+            await loadAll();
+        } else {
+            const err = await res.json();
+            showToast(err.detail || 'Assignment failed', 'error');
+        }
+    } catch(e) {
+        showToast('Network error', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fa-solid fa-check mr-1.5"></i> Assign Ticket';
+    }
+}
+
+async function confirmClearBlacklist(workerId, workerName) {
+    if (!confirm(`Clear blacklist for ${workerName}? This resets their penalty points to 0.`)) return;
+    try {
+        const res = await fetch(`${API}/admin/workers/${workerId}/clear-blacklist`, {
+            method: 'POST', headers,
+        });
+        if (res.ok) {
+            showToast(`${workerName} removed from blacklist`, 'success');
+            await loadAll();
+        } else {
+            showToast('Failed to clear blacklist', 'error');
+        }
+    } catch(e) {
+        showToast('Network error', 'error');
+    }
+}
+
+function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    const icon = document.getElementById('toast-icon');
+    const text = document.getElementById('toast-msg');
+    t.className = `fixed top-20 right-6 z-[100] px-5 py-3.5 rounded-2xl shadow-xl text-sm font-semibold flex items-center gap-2.5 transition-all`;
+    if (type === 'success') {
+        t.classList.add('bg-emerald-500', 'text-white');
+        icon.className = 'fa-solid fa-circle-check text-base';
+    } else {
+        t.classList.add('bg-red-500', 'text-white');
+        icon.className = 'fa-solid fa-circle-xmark text-base';
+    }
+    text.textContent = msg;
+    t.style.opacity = '1';
+    t.style.pointerEvents = 'auto';
+    setTimeout(() => { t.style.opacity = '0'; t.style.pointerEvents = 'none'; }, 3500);
+}
+
+// ── Breached tickets tab (restored) ───────────────────────
+function renderBreachedTickets() {
+    const el = document.getElementById('tickets-list');
+    const termFilter = document.getElementById('ticket-terminal-filter')?.value || '';
+    const breachedFiltered = termFilter
+        ? allBreachedTickets.filter(t => t.terminal === termFilter)
+        : allBreachedTickets;
+
+    if (!breachedFiltered.length) {
+        el.innerHTML = `<div class="text-center py-12 text-slate-400">
+            <i class="fa-solid fa-circle-check text-3xl mb-3 block text-emerald-400/60"></i>
+            <p class="text-sm font-medium">No breached tickets</p>
+            <p class="text-xs mt-1">All SLA deadlines are being met.</p>
+        </div>`;
+        return;
+    }
+
+    el.innerHTML = breachedFiltered.map(t => {
+        const age = t.escalated_at
+            ? Math.round((Date.now() - new Date(t.escalated_at)) / 3600000)
+            : '?';
+        const isSelected = selectedTicket?.id === t.id;
+        return `
+        <div class="ticket-card rounded-2xl p-4 bg-red-50/60 border-2 ${isSelected ? 'selected-critical' : 'border-red-200'}"
+             onclick="selectTicket('${t.id}', true)">
+            <div class="flex items-start justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-100 text-red-600 border border-red-200">
+                            ${t.priority}
+                        </span>
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-red-500 text-white">
+                            SLA BREACHED
+                        </span>
+                        ${t.ticket_number ? `<span class="font-mono text-[10px] font-bold text-slate-500">#${t.ticket_number}</span>` : ''}
+                        ${t.category ? `<span class="text-[10px] text-slate-400">${formatCategory(t.category)}</span>` : ''}
+                        ${t.terminal ? `<span class="text-[10px] px-1.5 py-0.5 rounded-md bg-blue-50 text-brand-blue font-bold ml-1">${t.terminal}</span>` : ''}
+                    </div>
+                    <p class="text-navy-900 font-semibold text-sm truncate">${t.title}</p>
+                    <p class="text-xs text-slate-400 mt-0.5">${t.location || 'No location'}</p>
+                </div>
+                <div class="flex-shrink-0 text-right">
+                    <p class="text-[10px] text-red-500 font-semibold">${age}h ago</p>
+                    ${isSelected ? `<i class="fa-solid fa-circle-check text-red-500 mt-1 block"></i>` : ''}
+                </div>
+            </div>
+            <div class="flex items-center gap-2 mt-3 pt-3 border-t border-red-200/60">
+                <button onclick="event.stopPropagation(); resolveTicket('${t.id}', '${t.title.replace(/'/g,"\'")}')"
+                    class="flex-1 py-1.5 rounded-xl text-[11px] font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition flex items-center justify-center gap-1">
+                    <i class="fa-solid fa-check"></i> Mark Resolved
+                </button>
+                <button onclick="event.stopPropagation(); selectTicket('${t.id}', true)"
+                    class="flex-1 py-1.5 rounded-xl text-[11px] font-bold bg-navy-900 text-white hover:bg-navy-800 transition flex items-center justify-center gap-1">
+                    <i class="fa-solid fa-user-plus"></i> Reassign
+                </button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+loadAll();
+
+// ── Auto-refresh ──────────────────────────────────────────
+// Every 60s while the tab is visible — keeps triage queues and the
+// accountability table current without manual reloads.
+setInterval(() => { if (!document.hidden) loadAll(); }, 60000);
+
+// ── Category display formatter ────────────────────────────
+// Converts raw API values to clean display labels.
+// "it" → "IT"  |  "technical_operations" → "Technical Operations"
+function formatCategory(cat) {
+    if (!cat) return 'Uncategorized';
+    const map = {
+        'it':                   'IT',
+        'hr':                   'HR',
+        'security':             'Security',
+        'technical_operations': 'Technical Operations',
+        'marketing':            'Marketing',
+        'legal':                'Legal',
+    };
+    return map[cat.toLowerCase()] ||
+           cat.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+
+// ── Render breached (critical_review) tickets ─────────────────────────────────
+// ── Uncategorized tickets — any priority, no department set ──
+// These never show in the Critical/High pending panel since they may be
+// LOW/MEDIUM priority. Without this tab a manager has no way to find
+// them except by manually browsing tickets.html.
+const DEPT_OPTIONS = [
+    ['it', 'IT'], ['security', 'Security'], ['hr', 'HR'],
+    ['technical_operations', 'Technical Operations'],
+    ['marketing', 'Marketing'], ['legal', 'Legal'],
+];
+
+function renderUncategorizedTickets() {
+    const el = document.getElementById('tickets-list');
+    const termFilter = document.getElementById('ticket-terminal-filter')?.value || '';
+    const filtered = termFilter
+        ? allUncategorizedTickets.filter(t => t.terminal === termFilter)
+        : allUncategorizedTickets;
+
+    if (!filtered.length) {
+        el.innerHTML = `<div class="text-center py-12 text-slate-400">
+            <i class="fa-solid fa-circle-check text-3xl mb-3 block text-emerald-400/60"></i>
+            <p class="text-sm font-medium">No uncategorized tickets</p>
+            <p class="text-xs mt-1">The ML engine successfully categorized everything.</p>
+        </div>`;
+        return;
+    }
+
+    const PRIORITY_COLORS = {
+        critical: 'bg-red-100 text-red-700 border-red-200',
+        high:     'bg-orange-100 text-orange-700 border-orange-200',
+        medium:   'bg-amber-100 text-amber-700 border-amber-200',
+        low:      'bg-slate-100 text-slate-600 border-slate-200',
+    };
+
+    el.innerHTML = filtered.map(t => `
+        <div class="ticket-card rounded-2xl p-4 bg-amber-50/40 border-2 border-amber-200">
+            <div class="flex items-start justify-between gap-3 mb-3">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${PRIORITY_COLORS[t.priority] || 'bg-slate-100 text-slate-600'}">
+                            ${t.priority}
+                        </span>
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 text-amber-700 border border-amber-200">
+                            ⚠️ Uncategorized
+                        </span>
+                        ${t.ticket_number ? `<span class="font-mono text-[10px] font-bold text-slate-500">#${t.ticket_number}</span>` : ''}
+                        ${t.terminal ? `<span class="text-[10px] px-1.5 py-0.5 rounded-md bg-blue-50 text-brand-blue font-bold">${t.terminal}</span>` : ''}
+                    </div>
+                    <p class="text-navy-900 font-semibold text-sm truncate">${t.title}</p>
+                    <p class="text-xs text-slate-400 mt-0.5">${t.location || 'No location'}</p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2 pt-2 border-t border-amber-200/60">
+                <select id="categorize-dept-${t.id}" class="flex-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-blue/30">
+                    <option value="">Select department...</option>
+                    ${DEPT_OPTIONS.map(([v,l]) => `<option value="${v}">${l}</option>`).join('')}
+                </select>
+                <button onclick="categorizeTicket('${t.id}', '${t.title.replace(/'/g,"\\'")}')"
+                    class="flex-shrink-0 px-3 py-1.5 rounded-lg text-xs font-bold bg-navy-900 text-white hover:bg-navy-800 transition">
+                    Categorize & Route
+                </button>
+            </div>
+        </div>`).join('');
+}
+
+async function categorizeTicket(ticketId, ticketTitle) {
+    const select = document.getElementById(`categorize-dept-${ticketId}`);
+    const category = select.value;
+    if (!category) { showToast('Please select a department first.', 'error'); return; }
+    if (!confirm(`Categorize "${ticketTitle}" as ${select.options[select.selectedIndex].text}? This will trigger auto-routing immediately.`)) return;
+
+    try {
+        const res = await fetch(`${API}/tickets/${ticketId}/category`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({ category }),
+        });
+        if (res.ok) {
+            showToast('✅ Categorized and routed', 'success');
+            await loadAll();
+        } else {
+            const err = await res.json();
+            showToast(err.detail || 'Failed to categorize', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+// ── Worker level (L1/L2/L3) — admin only ──────────────────
+async function setWorkerLevel(workerId, level, workerName) {
+    if (!level) return;
+    try {
+        const res = await fetch(`${API}/admin/workers/${workerId}/level`, {
+            method: 'PATCH', headers,
+            body: JSON.stringify({ level }),
+        });
+        if (res.ok) {
+            showToast(`${workerName} set to ${level}`, 'success');
+            await loadAll();
+        } else {
+            const err = await res.json();
+            showToast(err.detail || 'Could not set level', 'error');
+            await loadAll();   // revert the select
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+// ── Resolve a breached ticket directly ────────────────────────────────────────
+async function resolveTicket(ticketId, ticketTitle) {
+    if (!confirm(`Mark "${ticketTitle}" as Resolved?`)) return;
+    try {
+        const res = await fetch(`${API}/tickets/${ticketId}/status`, {
+            method: 'PATCH',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'resolved', notes: 'Resolved by manager' }),
+        });
+        if (res.ok) {
+            showToast('Ticket marked as resolved', 'success');
+            clearSelection();
+            await loadAll();
+        } else {
+            const err = await res.json();
+            showToast(err.detail || 'Failed to resolve', 'error');
+        }
+    } catch(e) {
+        showToast('Network error', 'error');
+    }
+}
+
+
+// ── Worker dot hover tooltips ──────────────────────────────────────────────────
+const PRIO_COLORS = {critical:'text-red-400', high:'text-orange-400', medium:'text-amber-400', low:'text-slate-400'};
+
+function showDotTooltip(event, ticketId, priority, title, isPaused) {
+    const el = document.getElementById('dot-tooltip');
+    el.style.display = 'block';
+    el.style.opacity = '1';
+
+    document.getElementById('tt-priority').textContent = priority.toUpperCase();
+    document.getElementById('tt-priority').className   = `font-bold uppercase tracking-wider text-[10px] mb-1 ${PRIO_COLORS[priority] || 'text-slate-300'}`;
+    document.getElementById('tt-title').textContent    = title || 'Loading...';
+    document.getElementById('tt-id').textContent       = `#${ticketId.substring(0,18)}...`;
+
+    const pausedEl = document.getElementById('tt-paused');
+    if (isPaused) { pausedEl.classList.remove('hidden'); }
+    else          { pausedEl.classList.add('hidden'); }
+
+    // Position tooltip above/below dot
+    const rect = event.target.getBoundingClientRect();
+    const x    = rect.left + window.scrollX;
+    const y    = rect.top  + window.scrollY;
+
+    el.style.left = Math.min(x, window.innerWidth - 240) + 'px';
+    el.style.top  = (y - el.offsetHeight - 8) + 'px';
+}
+
+function hideDotTooltip() {
+    const el = document.getElementById('dot-tooltip');
+    el.style.opacity = '0';
+    setTimeout(() => { el.style.display = 'none'; }, 150);
+}
+
+</script>
+
+    <!-- Hover tooltip for worker dots -->
+    <div id="dot-tooltip"
+         class="fixed z-[200] bg-navy-900 text-white text-xs rounded-xl px-3 py-2.5 shadow-xl pointer-events-none opacity-0 transition-opacity duration-150 max-w-[220px]"
+         style="display:none;">
+        <p id="tt-priority" class="font-bold uppercase tracking-wider text-[10px] mb-1"></p>
+        <p id="tt-title" class="text-white/80 leading-snug"></p>
+        <p id="tt-id" class="text-white/40 text-[9px] font-mono mt-1.5"></p>
+        <p id="tt-paused" class="hidden text-amber-400 text-[10px] font-semibold mt-1">⏸ Paused — waiting in queue</p>
+    </div>
+
+    <!-- Worker Performance Modal -->
+    <div id="worker-perf-modal" class="fixed inset-0 z-[100] bg-navy-900/70 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-3xl shadow-2xl w-full max-w-xl max-h-[85vh] overflow-hidden flex flex-col">
+            <div class="px-6 py-5 border-b border-slate-100 flex justify-between items-center flex-shrink-0">
+                <div>
+                    <h3 class="font-heading font-bold text-navy-900">Worker Performance</h3>
+                    <p id="worker-perf-name" class="text-xs text-slate-400 mt-0.5"></p>
+                </div>
+                <div class="flex items-center gap-2">
+                <button id="perf-download-btn" onclick="downloadWorkerPerformancePDF()" disabled
+                    class="px-3 py-1.5 rounded-lg text-xs font-bold bg-navy-900 text-white hover:bg-navy-800 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5">
+                    <i class="fa-solid fa-file-arrow-down"></i> Download PDF
+                </button>
+                <button onclick="document.getElementById('worker-perf-modal').classList.add('hidden'); if(window._workerPerfChart){window._workerPerfChart.destroy();window._workerPerfChart=null;}"
+                    class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition">
+                    <i class="fa-solid fa-xmark text-slate-600 text-sm"></i>
+                </button>
+                </div>
+            </div>
+            <div id="worker-perf-content" class="overflow-y-auto p-6">
+                <div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-brand-blue/40 text-xl"></i></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+async function loadWorkerPerformance(workerId, workerName) {
+    window._workerPerfData = null;
+    window._workerPerfName = workerName;
+    const dlBtn = document.getElementById('perf-download-btn');
+    if (dlBtn) dlBtn.disabled = true;
+    document.getElementById('worker-perf-name').textContent = workerName;
+    document.getElementById('worker-perf-content').innerHTML =
+        `<div class="text-center py-8"><i class="fa-solid fa-circle-notch fa-spin text-brand-blue/40 text-xl"></i></div>`;
+    document.getElementById('worker-perf-modal').classList.remove('hidden');
+
+    try {
+        const res = await fetch(`${API}/admin/workers/${workerId}/performance`, { headers });
+        if (!res.ok) throw new Error();
+        const d = await res.json();
+        window._workerPerfData = d;
+        if (dlBtn) dlBtn.disabled = false;
+
+        const ptsColor  = d.current_total_points >= 20 ? '#dc2626' : d.current_total_points >= 10 ? '#f59e0b' : '#10b981';
+        const pct       = Math.min(100, Math.round((d.current_total_points / 30) * 100));
+        const PC        = { critical:'#dc2626', high:'#ea580c', medium:'#f59e0b', low:'#64748b' };
+
+        const rows = d.recent_breaches.length
+            ? d.recent_breaches.map(b => `
+                <div class="flex items-center justify-between gap-3 py-2 border-b border-slate-100 last:border-0">
+                    <div class="flex-1 min-w-0">
+                        <p class="text-xs font-semibold text-navy-900 truncate">${b.ticket_title}</p>
+                        <p class="text-[10px] text-slate-400">${new Date(b.escalated_at).toLocaleString()}</p>
+                    </div>
+                    <div class="flex gap-2 items-center flex-shrink-0">
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full font-bold"
+                            style="background:${PC[b.priority]||'#64748b'}22;color:${PC[b.priority]||'#64748b'}">${b.priority.toUpperCase()}</span>
+                        <span class="text-xs font-bold text-red-600">−${b.points_deducted}pts</span>
+                    </div>
+                </div>`).join('')
+            : `<p class="text-sm text-emerald-500 text-center py-4 font-semibold">No breaches — clean record 🎉</p>`;
+
+        document.getElementById('worker-perf-content').innerHTML = `
+            <div class="mb-5">
+                <div class="flex justify-between items-center mb-2">
+                    <p class="text-xs font-bold uppercase tracking-wider text-slate-400">Total Penalty Points</p>
+                    ${d.is_blacklisted
+                        ? `<span class="text-xs px-2 py-0.5 rounded-lg bg-red-100 text-red-600 font-bold">⛔ Blacklisted</span>`
+                        : `<span class="text-xs px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-600 font-bold">${d.points_until_blacklist}pts to blacklist</span>`}
+                </div>
+                <p class="text-3xl font-extrabold mb-2" style="color:${ptsColor}">${d.current_total_points}</p>
+                <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                    <div class="h-full rounded-full" style="width:${pct}%;background:${ptsColor}"></div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-3 gap-3 mb-5">
+                ${['today','this_week','this_month'].map((k,i) => `
+                    <div class="text-center p-3 bg-slate-50 rounded-2xl border border-slate-200">
+                        <p class="text-lg font-extrabold text-navy-900">${d[k].points_lost}</p>
+                        <p class="text-[9px] font-bold uppercase tracking-wider text-slate-400">pts</p>
+                        <p class="text-[10px] text-slate-500 mt-0.5">${d[k].count} breach${d[k].count!==1?'es':''}</p>
+                        <p class="text-[9px] font-bold text-slate-400 mt-1">${['Today','This Week','This Month'][i]}</p>
+                    </div>`).join('')}
+            </div>
+
+            <div class="mb-5">
+                <canvas id="worker-perf-chart" height="110"></canvas>
+            </div>
+
+            <div>
+                <p class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Recent Breaches</p>
+                ${rows}
+            </div>`;
+
+        if (window._workerPerfChart) { window._workerPerfChart.destroy(); }
+        const ctx = document.getElementById('worker-perf-chart');
+        if (ctx) {
+            window._workerPerfChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Today','This Week','This Month'],
+                    datasets: [
+                        { label: 'Points Lost', data: [d.today.points_lost, d.this_week.points_lost, d.this_month.points_lost],
+                          backgroundColor: '#FEF2F244', borderColor: '#dc2626', borderWidth: 2, borderRadius: 6 },
+                        { label: 'Breaches', data: [d.today.count, d.this_week.count, d.this_month.count],
+                          backgroundColor: '#FFF7ED44', borderColor: '#f59e0b', borderWidth: 2, borderRadius: 6 },
+                    ],
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: true,
+                    plugins: { legend: { position: 'bottom', labels: { font: { size: 10 }, boxWidth: 10, padding: 10 } } },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { font: { size: 9 } }, grid: { color: '#f1f5f9' } },
+                        x: { ticks: { font: { size: 10, weight: '600' } }, grid: { display: false } },
+                    },
+                },
+            });
+        }
+    } catch (e) {
+        document.getElementById('worker-perf-content').innerHTML =
+            `<p class="text-center text-sm text-red-500 py-8">Failed to load performance data.</p>`;
+    }
+}
+
+// ── Worker Performance PDF export ─────────────────────────
+function downloadWorkerPerformancePDF() {
+    if (!window.jspdf) { alert('PDF library not loaded.'); return; }
+    const d = window._workerPerfData;
+    if (!d) return;
+    const name = window._workerPerfName || 'Worker';
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const PC = { critical: [220,38,38], high: [234,88,12], medium: [245,158,11], low: [100,116,139] };
+
+    // Header band
+    doc.setFillColor(10, 25, 47);
+    doc.rect(0, 0, 210, 26, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(15);
+    doc.setFont(undefined, 'bold');
+    doc.text('Worker Performance Report', 14, 13);
+    doc.setFontSize(10);
+    doc.setTextColor(148, 163, 184);
+    doc.text(name, 14, 20);
+    doc.setFontSize(8.5);
+    doc.setFont(undefined, 'normal');
+    doc.text(new Date().toLocaleString(), 196, 16, { align: 'right' });
+    doc.setDrawColor(0, 122, 195);
+    doc.setLineWidth(1.2);
+    doc.line(0, 26, 210, 26);
+
+    let y = 38;
+
+    // Status line: points + blacklist state
+    const ptsRGB = d.current_total_points >= 20 ? [220,38,38] : d.current_total_points >= 10 ? [245,158,11] : [16,185,129];
+    doc.setTextColor(100, 116, 139);
+    doc.setFontSize(8.5);
+    doc.setFont(undefined, 'bold');
+    doc.text('TOTAL PENALTY POINTS', 14, y);
+    if (d.is_blacklisted) {
+        doc.setFillColor(254, 226, 226);
+        doc.roundedRect(158, y - 5, 38, 8, 2, 2, 'F');
+        doc.setTextColor(220, 38, 38);
+        doc.text('BLACKLISTED', 177, y, { align: 'center' });
+    } else {
+        doc.setTextColor(16, 185, 129);
+        doc.text(`${d.points_until_blacklist} PTS TO BLACKLIST`, 196, y, { align: 'right' });
+    }
+    y += 10;
+    doc.setTextColor(ptsRGB[0], ptsRGB[1], ptsRGB[2]);
+    doc.setFontSize(26);
+    doc.text(String(d.current_total_points), 14, y);
+    y += 5;
+    // progress bar toward blacklist (threshold 30)
+    const pct = Math.min(1, d.current_total_points / 30);
+    doc.setFillColor(241, 245, 249);
+    doc.roundedRect(14, y, 182, 4.5, 2, 2, 'F');
+    doc.setFillColor(ptsRGB[0], ptsRGB[1], ptsRGB[2]);
+    doc.roundedRect(14, y, Math.max(3, 182 * pct), 4.5, 2, 2, 'F');
+    doc.setTextColor(148, 163, 184);
+    doc.setFontSize(7);
+    doc.setFont(undefined, 'normal');
+    doc.text('0', 14, y + 9);
+    doc.text('Blacklist threshold: 30', 196, y + 9, { align: 'right' });
+    y += 18;
+
+    // Period cards: Today / This Week / This Month
+    const periods = [['Today', d.today], ['This Week', d.this_week], ['This Month', d.this_month]];
+    const cw = 58, gap = 4;
+    periods.forEach(([label, p], i) => {
+        const x = 14 + i * (cw + gap);
+        doc.setFillColor(248, 250, 252);
+        doc.setDrawColor(226, 232, 240);
+        doc.roundedRect(x, y, cw, 24, 3, 3, 'FD');
+        doc.setTextColor(10, 25, 47);
+        doc.setFontSize(15);
+        doc.setFont(undefined, 'bold');
+        doc.text(`${p.points_lost}`, x + cw / 2, y + 10, { align: 'center' });
+        doc.setTextColor(100, 116, 139);
+        doc.setFontSize(7);
+        doc.setFont(undefined, 'normal');
+        doc.text(`PTS LOST · ${p.count} BREACH${p.count !== 1 ? 'ES' : ''}`, x + cw / 2, y + 15.5, { align: 'center' });
+        doc.setFont(undefined, 'bold');
+        doc.text(label.toUpperCase(), x + cw / 2, y + 20.5, { align: 'center' });
+    });
+    y += 34;
+
+    // Recent breaches table
+    doc.setTextColor(10, 25, 47);
+    doc.setFontSize(12);
+    doc.setFont(undefined, 'bold');
+    doc.text('Recent Breaches', 14, y);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.line(14, y + 2, 196, y + 2);
+    y += 9;
+
+    if (!d.recent_breaches.length) {
+        doc.setTextColor(16, 185, 129);
+        doc.setFontSize(10);
+        doc.text('No breaches — clean record', 14, y);
+    } else {
+        d.recent_breaches.forEach(b => {
+            if (y > 272) { doc.addPage(); y = 20; }
+            const rgb = PC[b.priority] || [100, 116, 139];
+            // priority chip
+            doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+            doc.circle(17, y - 1.2, 1.6, 'F');
+            // title (truncated) + date
+            doc.setTextColor(30, 41, 59);
+            doc.setFontSize(9.5);
+            doc.setFont(undefined, 'bold');
+            const title = b.ticket_title.length > 62 ? b.ticket_title.slice(0, 60) + '…' : b.ticket_title;
+            doc.text(title, 22, y);
+            doc.setFont(undefined, 'normal');
+            doc.setFontSize(7.5);
+            doc.setTextColor(148, 163, 184);
+            doc.text(new Date(b.escalated_at).toLocaleString(), 22, y + 4.5);
+            // priority label + points
+            doc.setTextColor(rgb[0], rgb[1], rgb[2]);
+            doc.setFontSize(8);
+            doc.setFont(undefined, 'bold');
+            doc.text(b.priority.toUpperCase(), 172, y, { align: 'right' });
+            doc.setTextColor(220, 38, 38);
+            doc.text(`-${b.points_deducted} pts`, 196, y, { align: 'right' });
+            // divider
+            doc.setDrawColor(241, 245, 249);
+            doc.line(14, y + 7, 196, y + 7);
+            y += 12;
+        });
+    }
+
+    // Footer
+    const pages = doc.getNumberOfPages();
+    for (let p = 1; p <= pages; p++) {
+        doc.setPage(p);
+        doc.setFontSize(7.5);
+        doc.setTextColor(148, 163, 184);
+        doc.text('Generated by Adani IMS — Accountability export', 14, 291);
+        doc.text(`Page ${p} of ${pages}`, 196, 291, { align: 'right' });
+    }
+
+    doc.save(`IMS_Performance_${name.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+</script>
+
+<script>
+    // ── Nav: show current user name + wire sign-out ─────────
+    (function () {
+        const el = document.getElementById('nav-user');
+        if (!el) return;
+        try {
+            const u = JSON.parse(localStorage.getItem('ims_user') || '{}');
+            if (u.full_name) el.textContent = u.full_name;
+        } catch (e) { /* ignore */ }
+    })();
+</script>
+</body>
+</html>

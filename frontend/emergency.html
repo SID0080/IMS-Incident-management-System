@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+    // ── Per-tab session isolation ─────────────────────────────
+    // sessionStorage is scoped to a single tab, so different tabs can be
+    // signed in as different users at the same time — useful for demos.
+    // We shim just the two IMS auth keys; everything else on localStorage
+    // still works normally.
+    (function () {
+        const KEYS = new Set(['ims_token', 'ims_user']);
+        const _get = localStorage.getItem.bind(localStorage);
+        const _set = localStorage.setItem.bind(localStorage);
+        const _del = localStorage.removeItem.bind(localStorage);
+        localStorage.getItem    = k => KEYS.has(k) ? sessionStorage.getItem(k)      : _get(k);
+        localStorage.setItem    = (k, v) => KEYS.has(k) ? sessionStorage.setItem(k, v) : _set(k, v);
+        localStorage.removeItem = k => KEYS.has(k) ? sessionStorage.removeItem(k)   : _del(k);
+    })();
+</script>
+
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMS | EMERGENCY</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { heading:['Outfit','sans-serif'], body:['Inter','sans-serif'] },
+    colors: {
+      navy:  { 900:'#0A192F', 800:'#112240', 700:'#1C3454' },
+      brand: { blue:'#007AC3', purple:'#6A2A88', magenta:'#B8205C' },
+      ink:   { DEFAULT:'#0F172A', soft:'#334155', muted:'#64748B', faint:'#94A3B8' }
+    },
+    backgroundImage: { 'adani-gradient':'linear-gradient(to right,#007AC3,#6A2A88,#B8205C)' },
+    boxShadow: {
+      'soft-xs':'0 1px 2px rgba(10,25,47,.04)',
+      'soft':'0 1px 3px rgba(10,25,47,.05), 0 4px 12px -2px rgba(10,25,47,.05)',
+      'soft-md':'0 4px 6px -1px rgba(10,25,47,.05), 0 10px 24px -4px rgba(10,25,47,.06)',
+      'soft-lg':'0 8px 16px -4px rgba(10,25,47,.06), 0 24px 48px -8px rgba(10,25,47,.08)'
+    }
+  }}
+}
+</script>
+    <style>
+        @keyframes pulse-ring { 0%,100% { transform: scale(1); opacity: 0.6; } 50% { transform: scale(1.12); opacity: 0.2; } }
+        .pulse-ring { animation: pulse-ring 2s ease-in-out infinite; }
+        @keyframes flicker { 0%,100% { opacity:1; } 45%,55% { opacity:0.85; } }
+        .flicker { animation: flicker 3s ease-in-out infinite; }
+        .input-dark { background: rgba(2,6,23,0.8); border: 1px solid rgba(255,255,255,0.08); transition: border-color 0.2s, box-shadow 0.2s; }
+        .input-dark:focus { border-color: rgba(239,68,68,0.5); box-shadow: 0 0 0 3px rgba(239,68,68,0.1); outline: none; }
+    </style>
+<style data-ui-upgrade>
+  body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+         text-rendering:optimizeLegibility; letter-spacing:-0.006em; }
+  h1,h2,h3,h4 { letter-spacing:-0.02em; }
+  h1 { line-height:1.15; } h2,h3 { line-height:1.25; } p { line-height:1.6; }
+
+  /* Soften default text from black to slate on LIGHT pages only */
+  body[class*="F8FAFC"] { color:#334155; }
+
+  /* Tabular figures so live counters/timers don't shift width */
+  .nums, [id^="stat-"], [id^="s-"], [id^="wd-countdown-"], [id^="countdown-"] {
+    font-variant-numeric: tabular-nums; font-feature-settings:"tnum";
+  }
+
+  /* One calm transition, scoped to interactive elements */
+  a, button, input, select, textarea, [role="button"] {
+    transition: color .2s ease, background-color .2s ease, border-color .2s ease,
+                box-shadow .2s ease, transform .2s ease;
+  }
+
+  /* Keyboard-only focus ring (brand-tinted); none on mouse click */
+  :focus { outline:none; }
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+    box-shadow: 0 0 0 3px rgba(0,122,195,.30); border-radius:10px;
+  }
+
+  /* Gentle press feedback */
+  button:active, [role="button"]:active { transform: translateY(1px); }
+
+  /* Respect reduced-motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { transition-duration:.01ms!important; animation-duration:.01ms!important; scroll-behavior:auto!important; }
+  }
+</style>
+<script>
+    // ── Auth guard (runs before any other script on this page) ─────
+    (function () {
+        const token = localStorage.getItem('ims_token');
+        const userStr = localStorage.getItem('ims_user');
+
+        if (!token || !userStr) {
+            window.location.replace('login.html');
+            return;
+        }
+
+        // JWT expiry check — decode the payload without needing a library
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if (payload.exp && payload.exp * 1000 < Date.now()) {
+                localStorage.removeItem('ims_token');
+                localStorage.removeItem('ims_user');
+                window.location.replace('login.html?expired=1');
+                return;
+            }
+        } catch (e) {
+            // Malformed token → force re-login
+            localStorage.removeItem('ims_token');
+            localStorage.removeItem('ims_user');
+            window.location.replace('login.html');
+            return;
+        }
+
+        // Role gate — set inside each page's script tag via <body>
+        const user = JSON.parse(userStr);
+        const requires = document.body.getAttribute('data-requires-role');
+        if (requires) {
+            const allowed = requires.split(',').map(s => s.trim());
+            if (!allowed.includes(user.role)) {
+                window.location.replace('dashboard.html?denied=1');
+                return;
+            }
+        }
+    })();
+</script>
+</head>
+<body class="font-body bg-slate-950 antialiased min-h-screen relative overflow-x-hidden">
+    <!-- Radial glow -->
+    <div class="absolute inset-0" style="background: radial-gradient(ellipse 80% 60% at 50% 40%, rgba(127,29,29,0.18) 0%, transparent 70%);"></div>
+    <!-- Grid -->
+    <div class="absolute inset-0 opacity-[0.03]" style="background-image: linear-gradient(rgba(255,255,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,1) 1px, transparent 1px); background-size: 40px 40px;"></div>
+    <!-- Corner back link -->
+    <a href="basic.html" class="absolute top-6 left-6 flex items-center gap-2 text-slate-600 hover:text-white text-sm transition font-medium z-10">
+        <i class="fa-solid fa-arrow-left text-xs"></i> Back to IMS
+    </a>
+
+    <div class="max-w-lg mx-auto px-4 w-full relative z-10 py-16 min-h-screen flex flex-col justify-center">
+        <!-- Icon -->
+        <div class="text-center mb-8">
+            <div class="relative w-28 h-28 mx-auto mb-6 flex items-center justify-center">
+                <div class="absolute inset-0 rounded-full bg-red-600/10 pulse-ring"></div>
+                <div class="absolute inset-2 rounded-full bg-red-600/10 pulse-ring" style="animation-delay: 0.5s;"></div>
+                <div class="relative w-20 h-20 rounded-full bg-red-950/60 border border-red-500/30 flex items-center justify-center" style="box-shadow: 0 0 40px rgba(220,38,38,0.3);">
+                    <i class="fa-solid fa-triangle-exclamation text-4xl text-red-500 flicker"></i>
+                </div>
+            </div>
+            <h1 class="font-heading text-4xl font-extrabold text-white mb-3 tracking-wide">EMERGENCY ESCALATION</h1>
+            <p class="text-red-200/60 text-sm leading-relaxed max-w-sm mx-auto">This bypasses standard SLA queues and instantly alerts all site managers and response units. All actions are permanently logged.</p>
+        </div>
+
+        <!-- Form -->
+        <div class="rounded-3xl p-8 mb-5 border border-red-500/15" style="background: rgba(15,23,42,0.85); backdrop-filter: blur(20px);">
+            <div class="space-y-5">
+                <div>
+                    <label class="block text-xs font-bold text-red-400/80 uppercase tracking-widest mb-2">Emergency Type</label>
+                    <select id="emerg-type" class="input-dark w-full px-4 py-3.5 rounded-xl text-white text-sm">
+                        <option value="fire">🔥 Fire / Explosion</option>
+                        <option value="chemical">☣️ Chemical Spill / Leak</option>
+                        <option value="medical">🚑 Medical Emergency</option>
+                        <option value="security">🚨 Security Breach</option>
+                        <option value="structural">🏗️ Structural Failure</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-red-400/80 uppercase tracking-widest mb-2">Precise Location</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-location-dot absolute left-4 top-1/2 -translate-y-1/2 text-red-500/50 text-sm"></i>
+                        <input id="emerg-location" type="text" placeholder="Building / Unit / Floor"
+                            class="input-dark w-full pl-10 pr-4 py-3.5 rounded-xl text-white placeholder-slate-700 text-sm">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-red-400/80 uppercase tracking-widest mb-2">Situation Report</label>
+                    <textarea id="emerg-desc" rows="3"
+                        class="input-dark w-full px-4 py-3.5 rounded-xl text-white placeholder-slate-700 text-sm resize-none"
+                        placeholder="What is happening right now?"></textarea>
+                </div>
+            </div>
+        </div>
+
+        <div id="emerg-msg" style="display:none;" class="mb-4 p-4 rounded-2xl text-sm font-medium border border-red-500/40 bg-red-950/50 text-red-200 flex items-center gap-2">
+            <i id="emerg-msg-icon" class="fa-solid fa-circle-exclamation flex-shrink-0"></i>
+            <span id="emerg-msg-text"></span>
+        </div>
+
+        <button onclick="triggerEmergency()" id="trigger-btn"
+            class="w-full py-4 rounded-2xl text-white font-black text-lg bg-red-600 hover:bg-red-500 active:bg-red-700 transition-all tracking-widest"
+            style="box-shadow: 0 0 30px rgba(220,38,38,0.4);">
+            <i class="fa-solid fa-siren-on mr-2"></i> TRIGGER ALERT
+        </button>
+
+        <p class="text-center text-xs text-slate-600 mt-5">
+            <i class="fa-solid fa-phone mr-1"></i> For life-threatening emergencies: <span class="text-slate-400 font-bold">Call 112</span>
+        </p>
+    </div>
+
+    <script>
+        const API = 'http://localhost:8000';
+        const token = localStorage.getItem('ims_token');
+
+        function showMsg(text, type) {
+            const msg = document.getElementById('emerg-msg');
+            const icon = document.getElementById('emerg-msg-icon');
+            const span = document.getElementById('emerg-msg-text');
+            span.textContent = text;
+            // Reset classes then apply variant
+            msg.className = 'mb-4 p-4 rounded-2xl text-sm font-medium border flex items-center gap-2';
+            if (type === 'success') {
+                msg.classList.add('border-emerald-500/40', 'bg-emerald-950/50', 'text-emerald-300');
+                icon.className = 'fa-solid fa-circle-check flex-shrink-0';
+            } else if (type === 'warn') {
+                msg.classList.add('border-amber-500/40', 'bg-amber-950/50', 'text-amber-300');
+                icon.className = 'fa-solid fa-triangle-exclamation flex-shrink-0';
+            } else {
+                msg.classList.add('border-red-500/40', 'bg-red-950/50', 'text-red-200');
+                icon.className = 'fa-solid fa-circle-exclamation flex-shrink-0';
+            }
+            msg.style.display = 'flex';
+        }
+
+        async function triggerEmergency() {
+            const type = document.getElementById('emerg-type').value;
+            const location = document.getElementById('emerg-location').value.trim();
+            const description = document.getElementById('emerg-desc').value.trim();
+            const btn = document.getElementById('trigger-btn');
+
+            if (!location || !description) {
+                showMsg('Please provide location and situation details.', 'error');
+                return;
+            }
+
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-2"></i> TRIGGERING...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(`${API}/emergency/escalate`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...(token ? { 'Authorization': `Bearer ${token}` } : {}) },
+                    body: JSON.stringify({ type, location, description })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showMsg(`Alert triggered successfully! Reference ID: ${data.id}`, 'success');
+                    // Disable button after successful trigger to prevent duplicate alerts
+                    btn.innerHTML = '<i class="fa-solid fa-check mr-2"></i> ALERT SENT';
+                    btn.classList.replace('bg-red-600', 'bg-emerald-700');
+                    btn.classList.replace('hover:bg-red-500', 'hover:bg-emerald-700');
+                    return; // keep button disabled
+                } else {
+                    showMsg(data.detail || 'Failed to trigger alert. Try again or call 112.', 'error');
+                }
+            } catch (e) {
+                showMsg('⚠ Server unreachable — alert NOT sent. CALL 112 DIRECTLY.', 'warn');
+            }
+
+            // Only re-enable on failure so user can retry
+            btn.innerHTML = '<i class="fa-solid fa-siren-on mr-2"></i> TRIGGER ALERT';
+            btn.disabled = false;
+        }
+    </script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+</html>

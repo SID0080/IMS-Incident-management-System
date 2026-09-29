@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+    // ── Per-tab session isolation ─────────────────────────────
+    // sessionStorage is scoped to a single tab, so different tabs can be
+    // signed in as different users at the same time — useful for demos.
+    // We shim just the two IMS auth keys; everything else on localStorage
+    // still works normally.
+    (function () {
+        const KEYS = new Set(['ims_token', 'ims_user']);
+        const _get = localStorage.getItem.bind(localStorage);
+        const _set = localStorage.setItem.bind(localStorage);
+        const _del = localStorage.removeItem.bind(localStorage);
+        localStorage.getItem    = k => KEYS.has(k) ? sessionStorage.getItem(k)      : _get(k);
+        localStorage.setItem    = (k, v) => KEYS.has(k) ? sessionStorage.setItem(k, v) : _set(k, v);
+        localStorage.removeItem = k => KEYS.has(k) ? sessionStorage.removeItem(k)   : _del(k);
+    })();
+</script>
+
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMS | Incidents</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { heading:['Outfit','sans-serif'], body:['Inter','sans-serif'] },
+    colors: {
+      navy:  { 900:'#0A192F', 800:'#112240', 700:'#1C3454' },
+      brand: { blue:'#007AC3', purple:'#6A2A88', magenta:'#B8205C' },
+      ink:   { DEFAULT:'#0F172A', soft:'#334155', muted:'#64748B', faint:'#94A3B8' }
+    },
+    backgroundImage: { 'adani-gradient':'linear-gradient(to right,#007AC3,#6A2A88,#B8205C)' },
+    boxShadow: {
+      'soft-xs':'0 1px 2px rgba(10,25,47,.04)',
+      'soft':'0 1px 3px rgba(10,25,47,.05), 0 4px 12px -2px rgba(10,25,47,.05)',
+      'soft-md':'0 4px 6px -1px rgba(10,25,47,.05), 0 10px 24px -4px rgba(10,25,47,.06)',
+      'soft-lg':'0 8px 16px -4px rgba(10,25,47,.06), 0 24px 48px -8px rgba(10,25,47,.08)'
+    }
+  }}
+}
+</script>
+<style data-ui-upgrade>
+  body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+         text-rendering:optimizeLegibility; letter-spacing:-0.006em; }
+  h1,h2,h3,h4 { letter-spacing:-0.02em; }
+  h1 { line-height:1.15; } h2,h3 { line-height:1.25; } p { line-height:1.6; }
+
+  /* Soften default text from black to slate on LIGHT pages only */
+  body[class*="F8FAFC"] { color:#334155; }
+
+  /* Tabular figures so live counters/timers don't shift width */
+  .nums, [id^="stat-"], [id^="s-"], [id^="wd-countdown-"], [id^="countdown-"] {
+    font-variant-numeric: tabular-nums; font-feature-settings:"tnum";
+  }
+
+  /* One calm transition, scoped to interactive elements */
+  a, button, input, select, textarea, [role="button"] {
+    transition: color .2s ease, background-color .2s ease, border-color .2s ease,
+                box-shadow .2s ease, transform .2s ease;
+  }
+
+  /* Keyboard-only focus ring (brand-tinted); none on mouse click */
+  :focus { outline:none; }
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+    box-shadow: 0 0 0 3px rgba(0,122,195,.30); border-radius:10px;
+  }
+
+  /* Gentle press feedback */
+  button:active, [role="button"]:active { transform: translateY(1px); }
+
+  /* Respect reduced-motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { transition-duration:.01ms!important; animation-duration:.01ms!important; scroll-behavior:auto!important; }
+  }
+</style>
+<style data-qol-polish>
+  /* Slim, calm scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; border: 2px solid transparent; background-clip: content-box; }
+
+  /* Content gently fades in on load */
+  @keyframes qol-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  main { animation: qol-fade-up .35s ease-out; }
+
+  /* Cards lift slightly on hover (scoped to existing rounded cards) */
+  .shadow-soft { transition: box-shadow .2s ease, transform .2s ease; }
+  .shadow-soft:hover { box-shadow: 0 6px 14px -2px rgba(10,25,47,.08), 0 16px 32px -8px rgba(10,25,47,.09); }
+
+  /* Table rows get a subtle left accent on hover */
+  tbody tr { transition: background-color .15s ease, box-shadow .15s ease; }
+  tbody tr:hover { box-shadow: inset 3px 0 0 #007AC3; }
+
+  @media (prefers-reduced-motion: reduce) { main { animation: none; } }
+</style>
+<script>
+    // ── Auth guard (runs before any other script on this page) ─────
+    (function () {
+        const token = localStorage.getItem('ims_token');
+        const userStr = localStorage.getItem('ims_user');
+
+        if (!token || !userStr) {
+            window.location.replace('login.html');
+            return;
+        }
+
+        // JWT expiry check — decode the payload without needing a library
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if (payload.exp && payload.exp * 1000 < Date.now()) {
+                localStorage.removeItem('ims_token');
+                localStorage.removeItem('ims_user');
+                window.location.replace('login.html?expired=1');
+                return;
+            }
+        } catch (e) {
+            // Malformed token → force re-login
+            localStorage.removeItem('ims_token');
+            localStorage.removeItem('ims_user');
+            window.location.replace('login.html');
+            return;
+        }
+
+        // Role gate — set inside each page's script tag via <body>
+        const user = JSON.parse(userStr);
+        const requires = document.body.getAttribute('data-requires-role');
+        if (requires) {
+            const allowed = requires.split(',').map(s => s.trim());
+            if (!allowed.includes(user.role)) {
+                window.location.replace('dashboard.html?denied=1');
+                return;
+            }
+        }
+    })();
+</script>
+</head>
+<body class="font-body bg-[#F8FAFC] antialiased">
+    <nav class="fixed w-full z-50 bg-white/90 backdrop-blur-lg border-b border-slate-200/50 shadow-soft">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
+            <a href="basic.html" class="flex items-center gap-2.5">
+                <div class="w-7 h-7 rounded-md bg-adani-gradient flex items-center justify-center shadow-soft">
+                    <i class="fa-solid fa-shield-halved text-white text-xs"></i>
+                </div>
+                <span class="font-heading font-bold text-xl text-navy-900">IMS</span>
+            </a>
+            <div class="flex items-center gap-1">
+                <a href="dashboard.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Dashboard</a>
+                <a href="tickets.html" class="px-4 py-2 rounded-full text-sm font-bold text-brand-blue">Incidents</a>
+                <a href="manager.html"  class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Manager</a>
+                <a href="sla.html"      class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">SLA</a>
+                <a href="worker.html"   class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">My Work</a>
+                <a href="analytics.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Analytics</a>
+                <button onclick="window.location.href='report.html'" class="ml-2 px-5 py-2 rounded-full text-white text-sm font-semibold bg-navy-900 hover:bg-navy-800 transition shadow-md shadow-navy-900/20 hover:-translate-y-0.5">
+                    <i class="fa-solid fa-plus mr-1.5 text-xs"></i>Report
+                </button>
+                <div class="ml-3 flex items-center gap-2 pl-3 border-l border-slate-200">
+                    <span id="nav-user" class="hidden sm:inline text-xs text-slate-500 font-medium max-w-[110px] truncate"></span>
+                    <button onclick="if (confirm('Sign out?')) { localStorage.removeItem('ims_token'); localStorage.removeItem('ims_user'); window.location.href='login.html'; }"
+                            class="w-8 h-8 rounded-full text-slate-500 hover:text-red-600 hover:bg-red-50 transition flex items-center justify-center" title="Sign out">
+                        <i class="fa-solid fa-right-from-bracket text-xs"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="pt-28 pb-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="mb-8 flex flex-col sm:flex-row justify-between items-end gap-4">
+            <div>
+                <p class="text-xs font-semibold text-brand-blue uppercase tracking-widest mb-1">Incident Log</p>
+                <h1 class="font-heading text-3xl font-extrabold text-navy-900">All Incidents</h1>
+                <p class="text-slate-400 text-sm mt-1.5">Manage and track all system alerts</p>
+            </div>
+            <div class="flex gap-3">
+                <div class="relative">
+                    <i class="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                    <input id="search" type="text" placeholder="Search by title, text or ticket no..." onkeyup="filterTickets()"
+                        class="pl-10 pr-5 py-2.5 rounded-full bg-white shadow-soft border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-blue/30 focus:border-brand-blue/50 text-sm w-64 transition-all">
+                </div>
+                <select id="filter-status" onchange="filterTickets()"
+                    class="px-4 py-2.5 rounded-full bg-white shadow-soft border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-blue/30 text-slate-600 font-medium cursor-pointer">
+                    <option value="">All Status</option>
+                    <option value="open">Open</option>
+                    <option value="in_progress">In Progress</option>
+                    <option value="resolved">Resolved</option>
+                    <option value="closed">Closed</option>
+                </select>
+                <select id="filter-terminal" onchange="filterTickets()"
+                    class="px-4 py-2.5 rounded-full bg-white shadow-soft border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-blue/30 text-slate-600 font-medium cursor-pointer">
+                    <option value="">All Terminals</option>
+                    <option value="T2">Terminal 2 (T2)</option>
+                    <option value="T3">Terminal 3 (T3)</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="bg-white rounded-3xl shadow-soft border border-slate-200/50 overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-slate-50/70 border-b border-slate-100">
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">ID</th>
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">Title</th>
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">Category</th>
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">Priority</th>
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">Status</th>
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">SLA</th>
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">Reported</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tickets-table">
+                        <tr><td colspan="7" class="px-8 py-14 text-center text-slate-400">
+                            <i class="fa-solid fa-circle-notch fa-spin text-3xl mb-4 block text-brand-blue/40"></i>
+                            Loading incidents...
+                        </td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <div id="detail-modal" class="hidden fixed inset-0 z-[60] flex items-start justify-center p-4 sm:p-6 overflow-y-auto"
+         style="background:rgba(10,25,47,.45); backdrop-filter:blur(3px);" onclick="if(event.target===this)closeTicket()">
+        <div class="bg-white rounded-3xl shadow-soft-lg border border-slate-200/60 w-full max-w-2xl my-8 relative">
+            <div class="absolute top-4 right-4 flex items-center gap-2">
+                <button onclick="downloadTicketPdf()" id="download-ticket-btn"
+                    class="px-3 py-1.5 rounded-xl text-xs font-bold bg-navy-900 text-white hover:bg-navy-800 transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-file-arrow-down"></i> Download
+                </button>
+                <button onclick="closeTicket()" aria-label="Close"
+                    class="w-9 h-9 rounded-full text-slate-400 hover:text-navy-900 hover:bg-slate-100 flex items-center justify-center transition">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div id="detail-body" class="p-7 sm:p-8"></div>
+        </div>
+    </div>
+
+    <script>
+    const API='http://localhost:8000';
+    const token=localStorage.getItem('ims_token');
+    const headers=token?{'Authorization':`Bearer ${token}`}:{};
+    let allTickets=[];
+    let currentTicket=null;   // set when a ticket detail modal is opened
+    // Keys are lowercase to match the API enum values (open, high, in_progress, etc.)
+    const PC={critical:'bg-red-50 text-red-600 border border-red-200',high:'bg-orange-50 text-orange-600 border border-orange-200',medium:'bg-amber-50 text-amber-600 border border-amber-200',low:'bg-slate-50 text-slate-600 border border-slate-200'};
+    const SC={open:'bg-blue-50 text-blue-600 border border-blue-200',in_progress:'bg-purple-50 text-purple-600 border border-purple-200',resolved:'bg-emerald-50 text-emerald-600 border border-emerald-200',closed:'bg-slate-50 text-slate-500 border border-slate-200'};
+    
+    async function loadTickets(){
+        try{
+            const res=await fetch(`${API}/tickets?limit=100`,{headers});
+            if(res.ok){
+                allTickets=await res.json();
+                renderTickets(allTickets);
+            } else {
+                document.getElementById('tickets-table').innerHTML=`<tr><td colspan="7" class="px-8 py-12 text-center text-red-400 text-sm">Failed to load incidents. Please check your connection or login status.</td></tr>`;
+            }
+        }catch(e){
+            document.getElementById('tickets-table').innerHTML='<tr><td colspan="7" class="px-8 py-12 text-center text-slate-400 text-sm">Cannot reach server.</td></tr>';
+        }
+    }
+    
+    async function copyTicketNumber(num, el) {
+        try {
+            await navigator.clipboard.writeText('#' + num);
+            const original = el.innerHTML;
+            el.innerHTML = `Ticket #${num} <i class="fa-solid fa-check ml-1 text-emerald-500"></i> copied`;
+            setTimeout(() => { el.innerHTML = original; }, 1500);
+        } catch (e) { /* clipboard unavailable (http) — ignore */ }
+    }
+
+    function filterTickets(){
+        const q=document.getElementById('search').value.toLowerCase();
+        const s=document.getElementById('filter-status').value;
+        const term=document.getElementById('filter-terminal').value;
+        renderTickets(allTickets.filter(t=>(!q||(t.title+' '+t.description+' '+(t.ticket_number||'')).toLowerCase().includes(q.replace('#','')))&&(!s||t.status===s)&&(!term||t.terminal===term)));
+    }
+    
+    function slaColor(t){
+        if(!t.sla_deadline)return'text-slate-400';
+        const h=(new Date(t.sla_deadline)-Date.now())/3600000;
+        if(h<0)return'text-red-600 font-bold';
+        if(h<2)return'text-amber-600 font-semibold';
+        return'text-emerald-600';
+    }
+    
+    function renderTickets(tickets){
+        if(!tickets.length){
+            document.getElementById('tickets-table').innerHTML='<tr><td colspan="7" class="px-8 py-12 text-center text-slate-400 text-sm">No incidents found.</td></tr>';
+            return;
+        }
+        document.getElementById('tickets-table').innerHTML=tickets.map(t=>`
+            <tr onclick="openTicket('${t.id}')" class="border-b border-slate-50 hover:bg-blue-50/30 cursor-pointer transition-colors">
+                <td class="px-8 py-5 text-navy-900 font-mono text-xs font-bold">#${t.ticket_number || (t.id||'').slice(0,8)}</td>
+                <td class="px-8 py-5 text-navy-900 font-semibold max-w-xs truncate">${t.title}</td>
+                <td class="px-8 py-5 text-slate-500 text-xs">${formatCategory(t.category)}${t.terminal ? ` <span class="ml-1 px-1.5 py-0.5 rounded-md bg-blue-50 text-brand-blue font-bold text-[10px]">${t.terminal}</span>` : ''}</td>
+                <td class="px-8 py-5"><span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${PC[t.priority]||'bg-slate-100 text-slate-600'}">${t.priority}</span></td>
+                <td class="px-8 py-5"><span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${SC[t.status]||'bg-slate-100 text-slate-600'}">${(t.status||'').replace('_',' ')}</span></td>
+                <td class="px-8 py-5 text-xs ${slaColor(t)}">${t.sla_deadline?new Date(t.sla_deadline).toLocaleString():'N/A'}</td>
+                <td class="px-8 py-5 text-slate-400 text-xs">${new Date(t.created_at).toLocaleDateString()}</td>
+            </tr>`).join('');
+    }
+    loadTickets();
+
+    // If arriving from another page with ?id=<ticket>, open that incident directly.
+    (function () {
+        const id = new URLSearchParams(location.search).get('id');
+        if (id) openTicket(id);
+    })();
+
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && !document.getElementById('detail-modal').classList.contains('hidden')) closeTicket();
+    });
+
+// ── Category display formatter ────────────────────────────
+// Converts raw API values to clean display labels.
+// "it" → "IT"  |  "technical_operations" → "Technical Operations"
+function formatCategory(cat) {
+    if (!cat) return 'Uncategorized';
+    const map = {
+        'it':                   'IT',
+        'hr':                   'HR',
+        'security':             'Security',
+        'technical_operations': 'Technical Operations',
+        'marketing':            'Marketing',
+        'legal':                'Legal',
+    };
+    return map[cat.toLowerCase()] ||
+           cat.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// ── Incident detail modal ─────────────────────────────────
+async function openTicket(id) {
+    const modal = document.getElementById('detail-modal');
+    const body  = document.getElementById('detail-body');
+    modal.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+    body.innerHTML = `<div class="py-16 text-center text-slate-400">
+        <i class="fa-solid fa-circle-notch fa-spin text-2xl mb-3 block text-brand-blue/40"></i>
+        <p class="text-sm">Loading incident…</p></div>`;
+
+    try {
+        const res = await fetch(`${API}/tickets/${id}`, { headers });
+        if (!res.ok) throw new Error(res.status === 404 ? 'Incident not found.' : 'Could not load incident.');
+        const t = await res.json();
+        currentTicket = t;
+        body.innerHTML = renderDetail(t);
+    } catch (e) {
+        body.innerHTML = `<div class="py-16 text-center text-slate-400">
+            <i class="fa-solid fa-triangle-exclamation text-2xl mb-3 block text-red-400/60"></i>
+            <p class="text-sm">${e.message || 'Could not reach the server.'}</p></div>`;
+    }
+}
+
+function closeTicket() {
+    document.getElementById('detail-modal').classList.add('hidden');
+    document.body.style.overflow = '';
+    currentTicket = null;
+}
+
+function downloadTicketPdf() {
+    if (!currentTicket || !window.jspdf) return;
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const t = currentTicket;
+
+    // Header
+    doc.setFillColor(10, 25, 47);
+    doc.rect(0, 0, 210, 26, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(15);
+    doc.setFont(undefined, 'bold');
+    doc.text('Adani IMS — Incident Report', 14, 17);
+
+    doc.setTextColor(20, 20, 20);
+    doc.setFontSize(11);
+
+    let y = 38;
+    const field = (label, value) => {
+        if (y > 270) { doc.addPage(); y = 20; }
+        doc.setFont(undefined, 'bold');
+        doc.text(`${label}:`, 14, y);
+        doc.setFont(undefined, 'normal');
+        const lines = doc.splitTextToSize(String(value || '—'), 130);
+        doc.text(lines, 64, y);
+        y += 8 * Math.max(1, lines.length);
+    };
+
+    field('Ticket No', t.ticket_number ? `#${t.ticket_number}` : t.id);
+    field('Title', t.title);
+    field('Priority', (t.priority || '').toUpperCase());
+    field('Status', (t.status || '').replace(/_/g, ' ').toUpperCase());
+    field('Department', t.category ? t.category.replace(/_/g, ' ').toUpperCase() : 'Uncategorized');
+    field('Terminal', t.terminal || 'Not specified');
+    field('Location', t.location || 'Not specified');
+    field('Device', t.device_type || 'Not specified');
+    field('Equipment Model', t.equipment_model || 'Not specified');
+    field('ML Confidence', t.ml_confidence ? `${Math.round(t.ml_confidence * 100)}%` : '—');
+    field('SLA Deadline', t.sla_deadline ? new Date(t.sla_deadline).toLocaleString() : 'N/A');
+    field('Assigned', t.assigned_at ? new Date(t.assigned_at).toLocaleString() : '—');
+    field('Resolved', t.resolved_at ? new Date(t.resolved_at).toLocaleString() : '—');
+    field('Reported', t.created_at ? new Date(t.created_at).toLocaleString() : '—');
+
+    y += 4;
+    doc.setFont(undefined, 'bold');
+    doc.text('Description:', 14, y);
+    y += 7;
+    doc.setFont(undefined, 'normal');
+    doc.setFontSize(10);
+    const descLines = doc.splitTextToSize(t.description || '', 182);
+    doc.text(descLines, 14, y);
+
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text('Generated by Adani IMS', 14, 290);
+
+    doc.save(`IMS_Ticket_${t.ticket_number || t.id.substring(0,8)}.pdf`);
+}
+
+// Drop ?id= from the URL so a refresh doesn't reopen the modal.
+if (location.search.includes('id=')) history.replaceState({}, '', 'tickets.html');
+
+function fmt(dt) { return dt ? new Date(dt).toLocaleString() : '—'; }
+
+function renderDetail(t) {
+    const pri = PC[t.priority] || 'bg-slate-100 text-slate-600';
+    const sta = SC[t.status]   || 'bg-slate-100 text-slate-600';
+    const confidence = (t.ml_confidence != null)
+        ? `${Math.round(t.ml_confidence * 100)}%` : '—';
+    const img = t.image_path
+        ? `<div class="mt-5">
+             <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">Attached evidence</p>
+             <img src="${API}/${t.image_path}" alt="evidence"
+                  class="rounded-xl border border-slate-200/60 max-h-72 object-contain bg-slate-50 w-full"
+                  onerror="this.parentElement.style.display='none'">
+           </div>` : '';
+
+    const row = (label, value) => `
+        <div class="py-3 flex justify-between gap-6 border-b border-slate-100 last:border-0">
+            <span class="text-xs font-semibold uppercase tracking-wider text-slate-400 flex-shrink-0">${label}</span>
+            <span class="text-sm text-slate-700 text-right">${value}</span>
+        </div>`;
+
+    return `
+    <div class="flex items-start gap-2 mb-1 flex-wrap">
+        <span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${pri}">${t.priority}</span>
+        <span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${sta}">${(t.status||'').replace(/_/g,' ')}</span>
+    </div>
+    <h2 class="font-heading text-2xl font-extrabold text-navy-900 leading-snug mt-2">${t.title}</h2>
+    <p class="text-xs text-slate-500 font-mono mt-1 font-bold cursor-pointer hover:text-brand-blue transition group" onclick="copyTicketNumber('${t.ticket_number || t.id}', this)" title="Click to copy">
+                Ticket #${t.ticket_number || t.id} <i class="fa-regular fa-copy ml-1 opacity-40 group-hover:opacity-100"></i>
+            </p>
+
+    <div class="mt-5">
+        <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Description</p>
+        <p class="text-sm text-slate-600 leading-relaxed whitespace-pre-wrap">${t.description || '—'}</p>
+    </div>
+
+    ${img}
+
+    <div class="mt-5 bg-slate-50/60 rounded-xl px-4">
+        ${row('Department', formatCategory(t.category))}
+        ${row('ML Confidence', confidence)}
+        ${row('Terminal', t.terminal || '—')}
+        ${row('Location', t.location || '—')}
+        ${row('Device', t.device_type || '—')}
+        ${row('Equipment Model', t.equipment_model || '—')}
+        ${row('SLA Deadline', fmt(t.sla_deadline))}
+        ${row('Assigned', fmt(t.assigned_at))}
+        ${row('Resolved', fmt(t.resolved_at))}
+        ${row('Reported', fmt(t.created_at))}
+    </div>`;
+}
+
+</script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+<script>
+    // ── Nav: show current user name + wire sign-out ─────────
+    (function () {
+        const el = document.getElementById('nav-user');
+        if (!el) return;
+        try {
+            const u = JSON.parse(localStorage.getItem('ims_user') || '{}');
+            if (u.full_name) el.textContent = u.full_name;
+        } catch (e) { /* ignore */ }
+    })();
+</script>
+</body>
+</html>

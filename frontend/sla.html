@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+    // ── Per-tab session isolation ─────────────────────────────
+    // sessionStorage is scoped to a single tab, so different tabs can be
+    // signed in as different users at the same time — useful for demos.
+    // We shim just the two IMS auth keys; everything else on localStorage
+    // still works normally.
+    (function () {
+        const KEYS = new Set(['ims_token', 'ims_user']);
+        const _get = localStorage.getItem.bind(localStorage);
+        const _set = localStorage.setItem.bind(localStorage);
+        const _del = localStorage.removeItem.bind(localStorage);
+        localStorage.getItem    = k => KEYS.has(k) ? sessionStorage.getItem(k)      : _get(k);
+        localStorage.setItem    = (k, v) => KEYS.has(k) ? sessionStorage.setItem(k, v) : _set(k, v);
+        localStorage.removeItem = k => KEYS.has(k) ? sessionStorage.removeItem(k)   : _del(k);
+    })();
+</script>
+
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMS | SLA Monitor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { heading:['Outfit','sans-serif'], body:['Inter','sans-serif'] },
+    colors: {
+      navy:  { 900:'#0A192F', 800:'#112240', 700:'#1C3454' },
+      brand: { blue:'#007AC3', purple:'#6A2A88', magenta:'#B8205C' },
+      ink:   { DEFAULT:'#0F172A', soft:'#334155', muted:'#64748B', faint:'#94A3B8' }
+    },
+    backgroundImage: { 'adani-gradient':'linear-gradient(to right,#007AC3,#6A2A88,#B8205C)' },
+    boxShadow: {
+      'soft-xs':'0 1px 2px rgba(10,25,47,.04)',
+      'soft':'0 1px 3px rgba(10,25,47,.05), 0 4px 12px -2px rgba(10,25,47,.05)',
+      'soft-md':'0 4px 6px -1px rgba(10,25,47,.05), 0 10px 24px -4px rgba(10,25,47,.06)',
+      'soft-lg':'0 8px 16px -4px rgba(10,25,47,.06), 0 24px 48px -8px rgba(10,25,47,.08)'
+    }
+  }}
+}
+</script>
+    <style>
+        @keyframes breach-pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }
+            50%       { opacity: 0.85; box-shadow: 0 0 0 6px rgba(239,68,68,0); }
+        }
+        @keyframes danger-glow {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(249,115,22,0.3); }
+            50%       { box-shadow: 0 0 0 5px rgba(249,115,22,0); }
+        }
+        .risk-breached { animation: breach-pulse 1.5s ease-in-out infinite; border-color: #ef4444 !important; }
+        .risk-danger   { animation: danger-glow 2s ease-in-out infinite; border-color: #f97316 !important; }
+        .sla-card      { transition: all 0.2s; border: 2px solid transparent; }
+        .sla-card:hover { transform: translateY(-1px); }
+        .countdown-ring { transform: rotate(-90deg); }
+        .ring-track  { fill: none; stroke-width: 5; }
+        .ring-fill   { fill: none; stroke-width: 5; stroke-linecap: round; transition: stroke-dashoffset 1s linear; }
+        .filter-btn.active { background: #0A192F; color: white; }
+        .filter-btn { transition: all 0.15s; }
+    </style>
+<style data-ui-upgrade>
+  body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+         text-rendering:optimizeLegibility; letter-spacing:-0.006em; }
+  h1,h2,h3,h4 { letter-spacing:-0.02em; }
+  h1 { line-height:1.15; } h2,h3 { line-height:1.25; } p { line-height:1.6; }
+
+  /* Soften default text from black to slate on LIGHT pages only */
+  body[class*="F8FAFC"] { color:#334155; }
+
+  /* Tabular figures so live counters/timers don't shift width */
+  .nums, [id^="stat-"], [id^="s-"], [id^="wd-countdown-"], [id^="countdown-"] {
+    font-variant-numeric: tabular-nums; font-feature-settings:"tnum";
+  }
+
+  /* One calm transition, scoped to interactive elements */
+  a, button, input, select, textarea, [role="button"] {
+    transition: color .2s ease, background-color .2s ease, border-color .2s ease,
+                box-shadow .2s ease, transform .2s ease;
+  }
+
+  /* Keyboard-only focus ring (brand-tinted); none on mouse click */
+  :focus { outline:none; }
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+    box-shadow: 0 0 0 3px rgba(0,122,195,.30); border-radius:10px;
+  }
+
+  /* Gentle press feedback */
+  button:active, [role="button"]:active { transform: translateY(1px); }
+
+  /* Respect reduced-motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { transition-duration:.01ms!important; animation-duration:.01ms!important; scroll-behavior:auto!important; }
+  }
+</style>
+<script>
+    // ── Auth guard (runs before any other script on this page) ─────
+    (function () {
+        const token = localStorage.getItem('ims_token');
+        const userStr = localStorage.getItem('ims_user');
+
+        if (!token || !userStr) {
+            window.location.replace('login.html');
+            return;
+        }
+
+        // JWT expiry check — decode the payload without needing a library
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if (payload.exp && payload.exp * 1000 < Date.now()) {
+                localStorage.removeItem('ims_token');
+                localStorage.removeItem('ims_user');
+                window.location.replace('login.html?expired=1');
+                return;
+            }
+        } catch (e) {
+            // Malformed token → force re-login
+            localStorage.removeItem('ims_token');
+            localStorage.removeItem('ims_user');
+            window.location.replace('login.html');
+            return;
+        }
+
+        // Role gate — set inside each page's script tag via <body data-requires-role="MANAGER,ADMIN">
+        const user = JSON.parse(userStr);
+        const requires = document.body.getAttribute('data-requires-role');
+        if (requires) {
+            const allowed = requires.split(',').map(s => s.trim());
+            if (!allowed.includes(user.role)) {
+                window.location.replace('dashboard.html?denied=1');
+                return;
+            }
+        }
+    })();
+</script>
+<style data-qol-polish>
+  /* Slim, calm scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; border: 2px solid transparent; background-clip: content-box; }
+
+  /* Content gently fades in on load */
+  @keyframes qol-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  main { animation: qol-fade-up .35s ease-out; }
+
+  /* Cards lift slightly on hover */
+  .shadow-soft { transition: box-shadow .2s ease, transform .2s ease; }
+  .shadow-soft:hover { box-shadow: 0 6px 14px -2px rgba(10,25,47,.08), 0 16px 32px -8px rgba(10,25,47,.09); }
+
+  /* Table rows get a subtle left accent on hover */
+  tbody tr { transition: background-color .15s ease, box-shadow .15s ease; }
+  tbody tr:hover { box-shadow: inset 3px 0 0 #007AC3; }
+
+  @media (prefers-reduced-motion: reduce) { main { animation: none; } }
+</style>
+</head>
+<body class="font-body bg-[#F8FAFC] antialiased">
+
+    <nav class="fixed w-full z-50 bg-white/90 backdrop-blur-lg border-b border-slate-200/50 shadow-soft">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
+            <a href="basic.html" class="flex items-center gap-2.5">
+                <div class="w-7 h-7 rounded-md bg-adani-gradient flex items-center justify-center shadow-soft">
+                    <i class="fa-solid fa-shield-halved text-white text-xs"></i>
+                </div>
+                <span class="font-heading font-bold text-xl text-navy-900">IMS</span>
+            </a>
+            <div class="flex items-center gap-1">
+                <a href="dashboard.html"  class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Dashboard</a>
+                <a href="tickets.html"    class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Incidents</a>
+                <a href="manager.html"    class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Manager</a>
+                <a href="sla.html"        class="px-4 py-2 rounded-full text-sm font-bold text-brand-blue">SLA</a>
+                <a href="worker.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">My Work</a>
+                <a href="analytics.html"  class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Analytics</a>
+                <button onclick="window.location.href='report.html'" class="ml-2 px-5 py-2 rounded-full text-white text-sm font-semibold bg-navy-900 hover:bg-navy-800 transition shadow-md shadow-navy-900/20 hover:-translate-y-0.5">
+                    <i class="fa-solid fa-plus mr-1.5 text-xs"></i>Report
+                </button>
+                <div class="ml-3 flex items-center gap-2 pl-3 border-l border-slate-200">
+                    <span id="nav-user" class="hidden sm:inline text-xs text-slate-500 font-medium max-w-[110px] truncate"></span>
+                    <button onclick="if (confirm('Sign out?')) { localStorage.removeItem('ims_token'); localStorage.removeItem('ims_user'); window.location.href='login.html'; }"
+                            class="w-8 h-8 rounded-full text-slate-500 hover:text-red-600 hover:bg-red-50 transition flex items-center justify-center" title="Sign out">
+                        <i class="fa-solid fa-right-from-bracket text-xs"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="pt-28 pb-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <!-- Header -->
+        <div class="mb-8 flex justify-between items-end">
+            <div>
+                <p class="text-xs font-semibold text-brand-blue uppercase tracking-widest mb-1">Live Monitoring</p>
+                <h1 class="font-heading text-3xl font-extrabold text-navy-900">SLA Dashboard</h1>
+                <p class="text-slate-400 text-sm mt-1.5 flex items-center gap-2">
+                    <span id="live-dot" class="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>
+                    <span id="last-sync">Connecting...</span>
+                </p>
+            </div>
+            <button onclick="fetchAndRender()" class="text-sm bg-white border border-slate-200 px-4 py-2 rounded-xl text-slate-600 hover:text-brand-blue hover:border-brand-blue transition shadow-soft flex items-center gap-2">
+                <i class="fa-solid fa-rotate-right"></i> Refresh
+            </button>
+        </div>
+
+        <!-- Summary cards -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+            <div class="bg-white rounded-2xl p-5 shadow-soft border border-slate-200/60 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-16 h-16 bg-gradient-to-bl from-slate-50 to-transparent rounded-bl-full"></div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Active</p>
+                <p id="s-active" class="font-heading text-3xl font-extrabold text-navy-900">--</p>
+            </div>
+            <div class="bg-white rounded-2xl p-5 shadow-soft border border-slate-200/60 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-16 h-16 bg-gradient-to-bl from-emerald-50 to-transparent rounded-bl-full"></div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Safe</p>
+                <p id="s-safe" class="font-heading text-3xl font-extrabold text-emerald-500">--</p>
+            </div>
+            <div class="bg-white rounded-2xl p-5 shadow-soft border border-slate-200/60 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-16 h-16 bg-gradient-to-bl from-amber-50 to-transparent rounded-bl-full"></div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">At Risk</p>
+                <p id="s-risk" class="font-heading text-3xl font-extrabold text-amber-500">--</p>
+            </div>
+            <div class="bg-white rounded-2xl p-5 shadow-soft border border-slate-200/60 border-b-[3px] border-b-red-500 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-16 h-16 bg-gradient-to-bl from-red-50 to-transparent rounded-bl-full"></div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Breached</p>
+                <p id="s-breached" class="font-heading text-3xl font-extrabold text-red-600">--</p>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="flex flex-wrap gap-2 mb-6">
+            <div class="flex gap-1 bg-white border border-slate-200 rounded-xl p-1 shadow-soft">
+                <button class="filter-btn active text-xs font-semibold px-3 py-1.5 rounded-lg" onclick="setRiskFilter('all', this)">All</button>
+                <button class="filter-btn text-xs font-semibold px-3 py-1.5 rounded-lg text-slate-500" onclick="setRiskFilter('breached', this)">🔴 Breached</button>
+                <button class="filter-btn text-xs font-semibold px-3 py-1.5 rounded-lg text-slate-500" onclick="setRiskFilter('danger', this)">🟠 Danger</button>
+                <button class="filter-btn text-xs font-semibold px-3 py-1.5 rounded-lg text-slate-500" onclick="setRiskFilter('warning', this)">🟡 Warning</button>
+                <button class="filter-btn text-xs font-semibold px-3 py-1.5 rounded-lg text-slate-500" onclick="setRiskFilter('safe', this)">🟢 Safe</button>
+                <button class="filter-btn text-xs font-semibold px-3 py-1.5 rounded-lg text-slate-500" onclick="setRiskFilter('paused', this)">⏸ Paused</button>
+            </div>
+            <select id="dept-filter" onchange="renderCards()" class="px-4 py-2 rounded-xl bg-white shadow-soft border border-slate-200 text-sm text-slate-600 font-medium cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-blue/30">
+                <option value="">All Departments</option>
+                <option value="it">IT</option>
+                <option value="security">Security</option>
+                <option value="hr">HR</option>
+                <option value="technical_operations">Technical Operations</option>
+                <option value="marketing">Marketing</option>
+                <option value="legal">Legal</option>
+            </select>
+            <select id="terminal-filter" onchange="renderCards()" class="px-4 py-2 rounded-xl bg-white shadow-soft border border-slate-200 text-sm text-slate-600 font-medium cursor-pointer focus:outline-none focus:ring-2 focus:ring-brand-blue/30">
+                <option value="">All Terminals</option>
+                <option value="T2">Terminal 2 (T2)</option>
+                <option value="T3">Terminal 3 (T3)</option>
+            </select>
+        </div>
+
+        <!-- SLA Cards Grid -->
+        <div id="sla-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+            <div class="col-span-full text-center py-16 text-slate-400">
+                <i class="fa-solid fa-circle-notch fa-spin text-3xl mb-4 block text-brand-blue/40"></i>
+                <p class="text-sm">Loading SLA data...</p>
+            </div>
+        </div>
+
+        <!-- Department breakdown table -->
+        <div class="mt-8 bg-white rounded-3xl shadow-soft border border-slate-200/50 overflow-hidden">
+            <div class="px-6 py-5 border-b border-slate-100">
+                <h2 class="font-heading text-base font-bold text-navy-900">Department Breach Rates</h2>
+                <p class="text-xs text-slate-400 mt-0.5">From GET /admin/sla-dashboard</p>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-slate-50/60 border-b border-slate-100">
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Department</th>
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Active</th>
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Breached</th>
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Breach Rate</th>
+                            <th class="text-left px-6 py-3.5 text-slate-400 font-semibold text-xs uppercase tracking-widest">Health</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dept-table">
+                        <tr><td colspan="5" class="px-6 py-8 text-center text-slate-400 text-sm">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+<script>
+const API = 'http://localhost:8000';
+const token = localStorage.getItem('token') || localStorage.getItem('ims_token');
+const headers = { 'Authorization': `Bearer ${token}` };
+
+let allTickets = [];
+let activeRiskFilter = 'all';
+let tickerInterval = null;
+
+// ── Fetch data ────────────────────────────────────────────
+async function fetchAndRender() {
+    try {
+        const [slaRes, dashRes] = await Promise.all([
+            fetch(`${API}/sla/status`, { headers }),
+            fetch(`${API}/admin/sla-dashboard`, { headers }),
+        ]);
+        if (slaRes.status === 401 || slaRes.status === 403) {
+            throw new Error('AUTH');
+        }
+        if (!slaRes.ok) throw new Error('SLA fetch failed');
+
+        const sla  = await slaRes.json();
+        const dash = dashRes.ok ? await dashRes.json() : null;
+
+        allTickets = sla.tickets;
+        updateSummaryCards(sla);
+        renderCards();
+        if (dash) renderDeptTable(dash.by_department);
+
+        document.getElementById('last-sync').textContent = `Last synced: ${new Date().toLocaleTimeString()}`;
+        document.getElementById('live-dot').className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block';
+
+        // Start client-side tick (decrement timers every second between API refreshes)
+        startTicker();
+    } catch(e) {
+        const isAuth = e.message === 'AUTH';
+        document.getElementById('last-sync').textContent = isAuth ? 'Access denied' : 'API offline';
+        document.getElementById('live-dot').className = 'w-1.5 h-1.5 rounded-full bg-red-400 inline-block';
+        document.getElementById('sla-grid').innerHTML = `<div class="col-span-full text-center py-16 text-slate-400">
+            <i class="fa-solid fa-${isAuth ? 'lock' : 'server'} text-3xl mb-3 block opacity-40"></i>
+            <p class="text-sm font-semibold">${isAuth ? 'Access denied' : 'Cannot reach the server'}</p>
+            <p class="text-xs mt-1">${isAuth
+                ? 'The SLA Dashboard is available to managers and admins. Log in with a manager or admin account.'
+                : 'Check that the backend is running at ' + API}</p></div>`;
+    }
+}
+
+// ── Client-side countdown tick ────────────────────────────
+function startTicker() {
+    if (tickerInterval) clearInterval(tickerInterval);
+    tickerInterval = setInterval(() => {
+        allTickets.forEach(t => {
+            // Paused tickets have a frozen SLA clock — never decrement them.
+            if (t.time_remaining_seconds !== null && t.risk_level !== 'paused') t.time_remaining_seconds -= 1;
+        });
+        updateCountdownDisplays();
+    }, 1000);
+}
+
+// ── Only update countdown displays without full re-render ─
+function updateCountdownDisplays() {
+    allTickets.forEach(t => {
+        const el = document.getElementById(`countdown-${t.id}`);
+        if (el) el.textContent = formatTime(t.time_remaining_seconds);
+        const ring = document.getElementById(`ring-${t.id}`);
+        if (ring) {
+            const pct = Math.max(0, t.pct_remaining ?? 0);
+            const circ = 2 * Math.PI * 22;
+            ring.style.strokeDashoffset = circ * (1 - pct);
+        }
+    });
+}
+
+// ── Summary cards ─────────────────────────────────────────
+function updateSummaryCards(sla) {
+    document.getElementById('s-active').textContent   = sla.total_active;
+    document.getElementById('s-safe').textContent     = sla.safe;
+    document.getElementById('s-risk').textContent     = sla.warning + sla.danger;
+    document.getElementById('s-breached').textContent = sla.breached;
+}
+
+// ── Filter ────────────────────────────────────────────────
+function setRiskFilter(risk, btn) {
+    activeRiskFilter = risk;
+    document.querySelectorAll('.filter-btn').forEach(b => {
+        b.classList.remove('active');
+        b.classList.add('text-slate-500');
+    });
+    btn.classList.add('active');
+    btn.classList.remove('text-slate-500');
+    renderCards();
+}
+
+// ── Render SLA cards ──────────────────────────────────────
+function renderCards() {
+    const dept = document.getElementById('dept-filter').value;
+    const terminal = document.getElementById('terminal-filter').value;
+    let tickets = allTickets;
+    if (activeRiskFilter !== 'all') tickets = tickets.filter(t => t.risk_level === activeRiskFilter);
+    if (dept) tickets = tickets.filter(t => t.category === dept);
+    if (terminal) tickets = tickets.filter(t => t.terminal === terminal);
+
+    const grid = document.getElementById('sla-grid');
+    if (!tickets.length) {
+        grid.innerHTML = `<div class="col-span-full text-center py-16 text-slate-400">
+            <i class="fa-solid fa-circle-check text-3xl mb-3 block text-emerald-400/50"></i>
+            <p class="text-sm font-medium">No tickets match this filter</p></div>`;
+        return;
+    }
+
+    grid.innerHTML = tickets.map(t => buildCard(t)).join('');
+}
+
+function buildCard(t) {
+    const risk       = t.risk_level;
+    const remaining  = t.time_remaining_seconds ?? 0;
+    const pct        = Math.max(0, Math.min(1, t.pct_remaining ?? 0));
+    const circ       = 2 * Math.PI * 22;   // circumference for r=22
+    const offset     = circ * (1 - pct);
+
+    const RING_COLOR = { safe: '#10b981', warning: '#f59e0b', danger: '#f97316', breached: '#ef4444', paused: '#94a3b8' };
+    const TRACK_COLOR= { safe: '#d1fae5', warning: '#fef3c7', danger: '#ffedd5', breached: '#fee2e2', paused: '#e2e8f0' };
+    const CARD_ANIM  = risk === 'breached' ? 'risk-breached' : risk === 'danger' ? 'risk-danger' : '';
+
+    const priorityBadge = {
+        critical: 'bg-red-100 text-red-600 border-red-200',
+        high:     'bg-orange-100 text-orange-600 border-orange-200',
+        medium:   'bg-amber-100 text-amber-600 border-amber-200',
+        low:      'bg-slate-100 text-slate-600 border-slate-200',
+    }[t.priority] || 'bg-slate-100 text-slate-600 border-slate-200';
+
+    const statusLabel = risk === 'paused'
+        ? { text: '⏸ Paused', cls: 'bg-slate-100 text-slate-600 border-slate-200' }
+        : ({
+            in_progress:     { text: 'In Progress', cls: 'bg-purple-50 text-purple-600 border-purple-200' },
+            critical_review: { text: 'Critical Review', cls: 'bg-red-50 text-red-600 border-red-200' },
+        }[t.status] || { text: t.status, cls: 'bg-slate-50 text-slate-600 border-slate-200' });
+
+    const countdownColor = risk === 'breached' ? 'text-red-600'
+        : risk === 'danger' ? 'text-orange-600'
+        : risk === 'warning' ? 'text-amber-600'
+        : risk === 'paused' ? 'text-slate-500'
+        : 'text-emerald-600';
+
+    const countdownLabel = risk === 'breached' ? 'OVERDUE'
+        : risk === 'paused' ? 'PAUSED'
+        : 'remaining';
+
+    return `
+    <div class="sla-card ${CARD_ANIM} bg-white rounded-2xl p-5 shadow-soft border-2">
+        <div class="flex items-start justify-between gap-3 mb-4">
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1.5">
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${priorityBadge}">${t.priority}</span>
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${statusLabel.cls}">${statusLabel.text}</span>
+                </div>
+                <p class="font-semibold text-navy-900 text-sm truncate">${t.title}</p>
+                <p class="text-xs text-slate-400 mt-0.5">${t.ticket_number ? '<span class="font-mono font-bold text-slate-500">#'+t.ticket_number+'</span> · ' : ''}${formatCategory(t.category)}${t.terminal ? ' · <span class="font-semibold text-brand-blue">'+t.terminal+'</span>' : ''} ${t.location ? '· ' + t.location : ''}</p>
+            </div>
+
+            <!-- Countdown ring -->
+            <div class="flex-shrink-0 flex flex-col items-center">
+                <svg width="54" height="54" viewBox="0 0 54 54">
+                    <circle class="ring-track countdown-ring" cx="27" cy="27" r="22"
+                        stroke="${TRACK_COLOR[risk]}" />
+                    <circle id="ring-${t.id}" class="ring-fill countdown-ring" cx="27" cy="27" r="22"
+                        stroke="${RING_COLOR[risk]}"
+                        stroke-dasharray="${circ}"
+                        stroke-dashoffset="${offset}" />
+                </svg>
+                <p id="countdown-${t.id}" class="text-xs font-bold mt-1 ${countdownColor}">
+                    ${formatTime(remaining)}
+                </p>
+                <p class="text-[9px] text-slate-400 uppercase tracking-wider">${countdownLabel}</p>
+            </div>
+        </div>
+
+        <div class="border-t border-slate-100 pt-3 flex items-center justify-between">
+            <div class="flex items-center gap-2 flex-wrap">
+                ${t.assignee_name
+                    ? `<div class="w-6 h-6 rounded-lg bg-navy-900 flex items-center justify-center flex-shrink-0">
+                           <span class="text-white text-[10px] font-bold">${t.assignee_name.charAt(0)}</span>
+                       </div>
+                       <span class="text-xs text-slate-600 font-medium">${t.assignee_name}</span>
+                       ${(() => { try { const extra = JSON.parse(t.additional_assignee_ids || '[]'); return extra.length > 0 ? `<span class="text-[10px] font-bold bg-blue-50 text-brand-blue border border-blue-200 px-1.5 py-0.5 rounded-full">+${extra.length} more</span>` : ''; } catch(e) { return ''; } })()} `
+                    : `<span class="text-xs text-red-500 font-medium"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Unassigned</span>`
+                }
+            </div>
+            <span class="text-[10px] text-slate-400">${t.sla_deadline ? new Date(t.sla_deadline).toLocaleTimeString() : 'No deadline'}</span>
+        </div>
+    </div>`;
+}
+
+// ── Department table ──────────────────────────────────────
+function renderDeptTable(byDept) {
+    const tbody = document.getElementById('dept-table');
+    const entries = Object.entries(byDept);
+    if (!entries.length) {
+        tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-slate-400 text-sm">No active tickets.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = entries.map(([dept, stats]) => {
+        const rate    = Math.round(stats.breach_rate * 100);
+        const barColor= rate >= 75 ? 'bg-red-500' : rate >= 40 ? 'bg-amber-500' : 'bg-emerald-500';
+        const rateColor= rate >= 75 ? 'text-red-600 font-bold' : rate >= 40 ? 'text-amber-600 font-semibold' : 'text-emerald-600';
+        return `<tr class="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+            <td class="px-6 py-4 font-semibold text-navy-900">${formatCategory(dept)}</td>
+            <td class="px-6 py-4 text-slate-600">${stats.total}</td>
+            <td class="px-6 py-4 text-slate-600">${stats.breached}</td>
+            <td class="px-6 py-4 ${rateColor}">${rate}%</td>
+            <td class="px-6 py-4 w-40">
+                <div class="w-full bg-slate-100 rounded-full h-2">
+                    <div class="${barColor} h-2 rounded-full transition-all" style="width:${rate}%"></div>
+                </div>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+// ── Format seconds → HH:MM:SS or +HH:MM:SS if overdue ────
+function formatTime(secs) {
+    if (secs === null || secs === undefined) return 'N/A';
+    const abs = Math.abs(secs);
+    const h   = Math.floor(abs / 3600);
+    const m   = Math.floor((abs % 3600) / 60);
+    const s   = abs % 60;
+    const str = [h, m, s].map(n => String(n).padStart(2, '0')).join(':');
+    return secs < 0 ? `+${str}` : str;
+}
+
+// Initial load + auto-refresh every 60s
+fetchAndRender();
+setInterval(fetchAndRender, 60000);
+
+// ── Category display formatter ────────────────────────────
+// Converts raw API values to clean display labels.
+// "it" → "IT"  |  "technical_operations" → "Technical Operations"
+function formatCategory(cat) {
+    if (!cat) return 'Uncategorized';
+    const map = {
+        'it':                   'IT',
+        'hr':                   'HR',
+        'security':             'Security',
+        'technical_operations': 'Technical Operations',
+        'marketing':            'Marketing',
+        'legal':                'Legal',
+    };
+    return map[cat.toLowerCase()] ||
+           cat.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+</script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+<script>
+    // ── Nav: show current user name + wire sign-out ─────────
+    (function () {
+        const el = document.getElementById('nav-user');
+        if (!el) return;
+        try {
+            const u = JSON.parse(localStorage.getItem('ims_user') || '{}');
+            if (u.full_name) el.textContent = u.full_name;
+        } catch (e) { /* ignore */ }
+    })();
+</script>
+</body>
+</html>

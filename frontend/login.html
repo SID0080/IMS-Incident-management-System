@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+    // ── Per-tab session isolation ─────────────────────────────
+    // sessionStorage is scoped to a single tab, so different tabs can be
+    // signed in as different users at the same time — useful for demos.
+    // We shim just the two IMS auth keys; everything else on localStorage
+    // still works normally.
+    (function () {
+        const KEYS = new Set(['ims_token', 'ims_user']);
+        const _get = localStorage.getItem.bind(localStorage);
+        const _set = localStorage.setItem.bind(localStorage);
+        const _del = localStorage.removeItem.bind(localStorage);
+        localStorage.getItem    = k => KEYS.has(k) ? sessionStorage.getItem(k)      : _get(k);
+        localStorage.setItem    = (k, v) => KEYS.has(k) ? sessionStorage.setItem(k, v) : _set(k, v);
+        localStorage.removeItem = k => KEYS.has(k) ? sessionStorage.removeItem(k)   : _del(k);
+    })();
+</script>
+
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMS | Sign In</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { heading:['Outfit','sans-serif'], body:['Inter','sans-serif'] },
+    colors: {
+      navy:  { 900:'#0A192F', 800:'#112240', 700:'#1C3454' },
+      brand: { blue:'#007AC3', purple:'#6A2A88', magenta:'#B8205C' },
+      ink:   { DEFAULT:'#0F172A', soft:'#334155', muted:'#64748B', faint:'#94A3B8' }
+    },
+    backgroundImage: { 'adani-gradient':'linear-gradient(to right,#007AC3,#6A2A88,#B8205C)' },
+    boxShadow: {
+      'soft-xs':'0 1px 2px rgba(10,25,47,.04)',
+      'soft':'0 1px 3px rgba(10,25,47,.05), 0 4px 12px -2px rgba(10,25,47,.05)',
+      'soft-md':'0 4px 6px -1px rgba(10,25,47,.05), 0 10px 24px -4px rgba(10,25,47,.06)',
+      'soft-lg':'0 8px 16px -4px rgba(10,25,47,.06), 0 24px 48px -8px rgba(10,25,47,.08)'
+    }
+  }}
+}
+</script>
+    <style>
+        .glass { background: rgba(255,255,255,0.08); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255,255,255,0.15); }
+        .input-glass { background: rgba(10,25,47,0.5); border: 1px solid rgba(255,255,255,0.1); }
+        .input-glass:focus { border-color: rgba(0,122,195,0.6); box-shadow: 0 0 0 3px rgba(0,122,195,0.15); outline: none; }
+    </style>
+<style data-ui-upgrade>
+  body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+         text-rendering:optimizeLegibility; letter-spacing:-0.006em; }
+  h1,h2,h3,h4 { letter-spacing:-0.02em; }
+  h1 { line-height:1.15; } h2,h3 { line-height:1.25; } p { line-height:1.6; }
+
+  /* Soften default text from black to slate on LIGHT pages only */
+  body[class*="F8FAFC"] { color:#334155; }
+
+  /* Tabular figures so live counters/timers don't shift width */
+  .nums, [id^="stat-"], [id^="s-"], [id^="wd-countdown-"], [id^="countdown-"] {
+    font-variant-numeric: tabular-nums; font-feature-settings:"tnum";
+  }
+
+  /* One calm transition, scoped to interactive elements */
+  a, button, input, select, textarea, [role="button"] {
+    transition: color .2s ease, background-color .2s ease, border-color .2s ease,
+                box-shadow .2s ease, transform .2s ease;
+  }
+
+  /* Keyboard-only focus ring (brand-tinted); none on mouse click */
+  :focus { outline:none; }
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+    box-shadow: 0 0 0 3px rgba(0,122,195,.30); border-radius:10px;
+  }
+
+  /* Gentle press feedback */
+  button:active, [role="button"]:active { transform: translateY(1px); }
+
+  /* Respect reduced-motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { transition-duration:.01ms!important; animation-duration:.01ms!important; scroll-behavior:auto!important; }
+  }
+</style>
+</head>
+<body class="font-body antialiased min-h-screen flex items-center justify-center relative">
+    <div class="absolute inset-0 z-0">
+        <img src="https://images.unsplash.com/photo-1436491865332-7a61a109cc05?q=80&w=2074&auto=format&fit=crop" class="w-full h-full object-cover" />
+        <div class="absolute inset-0" style="background: linear-gradient(135deg, rgba(10,25,47,0.92) 0%, rgba(106,42,136,0.5) 100%);"></div>
+        <div class="absolute inset-0 opacity-[0.04]" style="background-image: linear-gradient(rgba(255,255,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,1) 1px, transparent 1px); background-size: 50px 50px;"></div>
+    </div>
+
+    <div class="w-full max-w-md px-4 relative z-10">
+        <div class="text-center mb-10">
+            <a href="basic.html" class="inline-flex flex-col items-center gap-3">
+                <div class="w-14 h-14 rounded-2xl bg-adani-gradient flex items-center justify-center shadow-2xl shadow-brand-purple/30">
+                    <i class="fa-solid fa-shield-halved text-white text-2xl"></i>
+                </div>
+                <span class="font-heading font-bold text-3xl text-white tracking-tight">IMS</span>
+            </a>
+            <p class="mt-2 text-white/60 text-sm">Enterprise Command Center</p>
+        </div>
+
+        <div class="glass rounded-3xl shadow-2xl p-8">
+            <div id="login-banner" class="hidden mb-4 p-3 rounded-xl text-xs font-semibold flex items-center gap-2"></div>
+            <div class="flex bg-white/5 rounded-2xl p-1 mb-6">
+                <button id="tab-login" onclick="switchTab('login')" class="flex-1 py-2.5 rounded-xl text-sm font-bold text-white bg-white/15 transition">
+                    <i class="fa-solid fa-right-to-bracket mr-2"></i>Sign In
+                </button>
+                <button id="tab-register" onclick="switchTab('register')" class="flex-1 py-2.5 rounded-xl text-sm font-bold text-slate-400 transition hover:text-white">
+                    <i class="fa-solid fa-user-plus mr-2"></i>Register
+                </button>
+            </div>
+
+            <div id="alert-msg" class="hidden mb-5 p-3.5 rounded-2xl text-sm flex items-center gap-2">
+                <i id="alert-icon" class="fa-solid fa-circle-exclamation"></i>
+                <span id="alert-text"></span>
+            </div>
+
+            <!-- LOGIN -->
+            <div id="form-login" class="space-y-5">
+                <div>
+                    <label class="block text-sm font-semibold text-slate-300 mb-2">Corporate Email</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+                        <input id="email" type="email" placeholder="your@adani.com" class="input-glass w-full pl-11 pr-4 py-3.5 rounded-2xl text-white placeholder-slate-600 text-sm transition">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-300 mb-2">Password</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+                        <input id="password" type="password" placeholder="••••••••" class="input-glass w-full pl-11 pr-12 py-3.5 rounded-2xl text-white placeholder-slate-600 text-sm transition">
+                        <button onclick="togglePassword()" class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition">
+                            <i id="eye-icon" class="fa-regular fa-eye text-sm"></i>
+                        </button>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-300 mb-2">
+                        Personal Access Code
+                        <span class="text-white/40 font-normal ml-1 text-xs">— not required for Admin</span>
+                    </label>
+                    <div class="relative">
+                        <i class="fa-solid fa-key absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+                        <input id="login-code" type="text" placeholder="e.g. ADN-IT-W1" class="input-glass w-full pl-11 pr-4 py-3.5 rounded-2xl text-white placeholder-slate-600 text-sm transition font-mono">
+                    </div>
+                    <p class="text-white/40 text-xs mt-1.5 flex items-center gap-1">
+                        <i class="fa-solid fa-circle-info text-white/30"></i>
+                        Your unique code. Admins leave this blank.
+                    </p>
+                </div>
+                <button onclick="handleLogin()" id="login-btn" class="w-full py-3.5 mt-1 rounded-2xl text-white font-bold bg-gradient-to-r from-brand-blue via-brand-purple to-brand-magenta hover:opacity-90 transition-all shadow-lg text-sm tracking-wide hover:-translate-y-0.5 active:translate-y-0">
+                    <i class="fa-solid fa-right-to-bracket mr-2"></i> Authenticate
+                </button>
+            </div>
+
+            <!-- REGISTER -->
+            <div id="form-register" class="space-y-5 hidden">
+                <div>
+                    <label class="block text-sm font-semibold text-slate-300 mb-2">Full Name</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-user absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+                        <input id="reg-name" type="text" placeholder="Your full name" class="input-glass w-full pl-11 pr-4 py-3.5 rounded-2xl text-white placeholder-slate-600 text-sm transition">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-300 mb-2">Corporate Email</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+                        <input id="reg-email" type="email" placeholder="your@adani.com" class="input-glass w-full pl-11 pr-4 py-3.5 rounded-2xl text-white placeholder-slate-600 text-sm transition">
+                    </div>
+                    <p class="text-white/40 text-xs mt-1.5 flex items-center gap-1">
+                        <i class="fa-solid fa-circle-info text-white/30"></i>
+                        Must match the email your access code was issued to.
+                    </p>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-300 mb-2">Password</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-lock absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+                        <input id="reg-password" type="password" placeholder="Min 6 characters" class="input-glass w-full pl-11 pr-4 py-3.5 rounded-2xl text-white placeholder-slate-600 text-sm transition">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-300 mb-2">
+                        Personal Access Code <span class="text-red-400 ml-0.5">*</span>
+                    </label>
+                    <div class="relative">
+                        <i class="fa-solid fa-key absolute left-4 top-1/2 -translate-y-1/2 text-slate-500 text-sm"></i>
+                        <input id="reg-code" type="text" placeholder="e.g. ADN-IT-W1" class="input-glass w-full pl-11 pr-4 py-3.5 rounded-2xl text-white placeholder-slate-600 text-sm transition font-mono">
+                    </div>
+                    <p class="text-white/40 text-xs mt-1.5 flex items-center gap-1.5">
+                        <i class="fa-solid fa-shield-halved text-white/30"></i>
+                        Your role and department are set automatically from your code.
+                    </p>
+                </div>
+                <button onclick="handleRegister()" id="register-btn" class="w-full py-3.5 mt-1 rounded-2xl text-white font-bold bg-gradient-to-r from-brand-blue via-brand-purple to-brand-magenta hover:opacity-90 transition-all shadow-lg text-sm tracking-wide hover:-translate-y-0.5 active:translate-y-0">
+                    <i class="fa-solid fa-user-plus mr-2"></i> Create Account
+                </button>
+            </div>
+
+            <p class="text-center text-xs text-white/50 mt-6 pt-6 border-t border-white/10">
+                <i class="fa-solid fa-lock-keyhole mr-1 text-white/40"></i>
+                Protected system — authorised personnel only
+            </p>
+        </div>
+    </div>
+
+<script>
+    const API = 'http://localhost:8000';
+
+    // ── If already signed in, skip the login screen ────────────
+    // (unless they arrived via ?expired or ?denied — those need to see why)
+    (function () {
+        const p = new URLSearchParams(window.location.search);
+        if (!p.has('expired') && !p.has('denied')) {
+            const t = localStorage.getItem('ims_token');
+            if (t) {
+                try {
+                    const payload = JSON.parse(atob(t.split('.')[1]));
+                    if (payload.exp && payload.exp * 1000 > Date.now()) {
+                        window.location.replace('dashboard.html');
+                        return;
+                    }
+                } catch (e) { /* fall through to login */ }
+            }
+        }
+    })();
+
+    // ── Banner for redirected sessions ─────────────────────────
+    window.addEventListener('DOMContentLoaded', () => {
+        const p = new URLSearchParams(window.location.search);
+        const banner = document.getElementById('login-banner');
+        if (p.has('expired')) {
+            banner.className = 'mb-4 p-3 rounded-xl text-xs font-semibold flex items-center gap-2 bg-amber-500/15 border border-amber-500/30 text-amber-200';
+            banner.innerHTML = '<i class="fa-solid fa-clock"></i> Your session expired. Please sign in again.';
+            banner.classList.remove('hidden');
+        } else if (p.has('denied')) {
+            banner.className = 'mb-4 p-3 rounded-xl text-xs font-semibold flex items-center gap-2 bg-red-500/15 border border-red-500/30 text-red-200';
+            banner.innerHTML = '<i class="fa-solid fa-lock"></i> That page needs a manager or admin account.';
+            banner.classList.remove('hidden');
+        }
+        // Clear localStorage on any failure landing so a stale user object doesn't hang around
+        if (p.has('expired')) {
+            localStorage.removeItem('ims_token');
+            localStorage.removeItem('ims_user');
+        }
+    });
+
+    function showAlert(text, type = 'error') {
+        const el = document.getElementById('alert-msg');
+        const icon = document.getElementById('alert-icon');
+        document.getElementById('alert-text').textContent = text;
+        el.className = 'mb-5 p-3.5 rounded-2xl text-sm flex items-center gap-2 ';
+        if (type === 'success') { el.className += 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-200'; icon.className = 'fa-solid fa-circle-check'; }
+        else { el.className += 'bg-red-500/15 border border-red-500/30 text-red-200'; icon.className = 'fa-solid fa-circle-exclamation'; }
+        el.classList.remove('hidden');
+    }
+
+    function switchTab(tab) {
+        const isLogin = tab === 'login';
+        document.getElementById('form-login').classList.toggle('hidden', !isLogin);
+        document.getElementById('form-register').classList.toggle('hidden', isLogin);
+        document.getElementById('tab-login').className = `flex-1 py-2.5 rounded-xl text-sm font-bold transition ${isLogin ? 'text-white bg-white/15' : 'text-slate-400 hover:text-white'}`;
+        document.getElementById('tab-register').className = `flex-1 py-2.5 rounded-xl text-sm font-bold transition ${!isLogin ? 'text-white bg-white/15' : 'text-slate-400 hover:text-white'}`;
+        document.getElementById('alert-msg').classList.add('hidden');
+    }
+
+    function togglePassword() {
+        const pw = document.getElementById('password');
+        const icon = document.getElementById('eye-icon');
+        pw.type = pw.type === 'password' ? 'text' : 'password';
+        icon.className = pw.type === 'password' ? 'fa-regular fa-eye text-sm' : 'fa-regular fa-eye-slash text-sm';
+    }
+
+    async function handleLogin() {
+        const email       = document.getElementById('email').value.trim();
+        const password    = document.getElementById('password').value;
+        const access_code = document.getElementById('login-code').value.trim() || null;
+        const btn         = document.getElementById('login-btn');
+
+        if (!email || !password) { showAlert('Please enter your email and password.'); return; }
+
+        btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Authenticating...';
+        btn.disabled = true;
+        try {
+            const res = await fetch(`${API}/auth/login`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password, access_code }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                showAlert(data.detail || 'Invalid credentials or access code.');
+                btn.innerHTML = '<i class="fa-solid fa-right-to-bracket mr-2"></i> Authenticate';
+                btn.disabled = false;
+                return;
+            }
+            localStorage.setItem('token', data.access_token);
+            localStorage.setItem('ims_token', data.access_token);
+            localStorage.setItem('ims_user', JSON.stringify(data.user));
+            localStorage.setItem('role', data.user.role);
+            btn.innerHTML = '<i class="fa-solid fa-check mr-2"></i> Authenticated';
+            const role = data.user.role;
+            const normalizedRole = typeof role === 'number' ? role : String(role).toUpperCase();
+            if (normalizedRole === 'WORKER' || normalizedRole === 1 || normalizedRole === '1') {
+                window.location.href = 'worker.html';
+            } else if (normalizedRole === 'MANAGER' || normalizedRole === 2 || normalizedRole === '2') {
+                window.location.href = 'manager.html';
+            } else {
+                window.location.href = 'dashboard.html';
+            }
+        } catch (e) {
+            showAlert('Cannot reach the server.');
+            btn.innerHTML = '<i class="fa-solid fa-right-to-bracket mr-2"></i> Authenticate';
+            btn.disabled = false;
+        }
+    }
+
+    async function handleRegister() {
+        const full_name   = document.getElementById('reg-name').value.trim();
+        const email       = document.getElementById('reg-email').value.trim();
+        const password    = document.getElementById('reg-password').value;
+        const access_code = document.getElementById('reg-code').value.trim();
+        const btn         = document.getElementById('register-btn');
+
+        if (!full_name || !email || !password) { showAlert('Please fill in all fields.'); return; }
+        if (!access_code)                       { showAlert('Your personal access code is required.'); return; }
+
+        btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Verifying code...';
+        btn.disabled = true;
+        try {
+            const res = await fetch(`${API}/auth/register`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ full_name, email, password, access_code }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                showAlert(data.detail || 'Registration failed. Check your code and email.');
+                btn.innerHTML = '<i class="fa-solid fa-user-plus mr-2"></i> Create Account';
+                btn.disabled = false;
+                return;
+            }
+            const dept = (data.department || '').replace(/_/g,' ').toUpperCase();
+            showAlert(`Account created as ${data.role}${dept ? ' — ' + dept : ''}. Switching to Sign In...`, 'success');
+            setTimeout(() => {
+                switchTab('login');
+                document.getElementById('email').value = email;
+                document.getElementById('login-code').value = access_code;
+            }, 1800);
+            btn.innerHTML = '<i class="fa-solid fa-user-plus mr-2"></i> Create Account';
+            btn.disabled = false;
+        } catch (e) {
+            showAlert('Cannot reach the server.');
+            btn.innerHTML = '<i class="fa-solid fa-user-plus mr-2"></i> Create Account';
+            btn.disabled = false;
+        }
+    }
+
+    document.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleLogin(); });
+</script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+</html>

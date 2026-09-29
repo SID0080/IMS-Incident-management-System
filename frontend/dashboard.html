@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+    // ── Per-tab session isolation ─────────────────────────────
+    // sessionStorage is scoped to a single tab, so different tabs can be
+    // signed in as different users at the same time — useful for demos.
+    // We shim just the two IMS auth keys; everything else on localStorage
+    // still works normally.
+    (function () {
+        const KEYS = new Set(['ims_token', 'ims_user']);
+        const _get = localStorage.getItem.bind(localStorage);
+        const _set = localStorage.setItem.bind(localStorage);
+        const _del = localStorage.removeItem.bind(localStorage);
+        localStorage.getItem    = k => KEYS.has(k) ? sessionStorage.getItem(k)      : _get(k);
+        localStorage.setItem    = (k, v) => KEYS.has(k) ? sessionStorage.setItem(k, v) : _set(k, v);
+        localStorage.removeItem = k => KEYS.has(k) ? sessionStorage.removeItem(k)   : _del(k);
+    })();
+</script>
+
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMS | Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { heading:['Outfit','sans-serif'], body:['Inter','sans-serif'] },
+    colors: {
+      navy:  { 900:'#0A192F', 800:'#112240', 700:'#1C3454' },
+      brand: { blue:'#007AC3', purple:'#6A2A88', magenta:'#B8205C' },
+      ink:   { DEFAULT:'#0F172A', soft:'#334155', muted:'#64748B', faint:'#94A3B8' }
+    },
+    backgroundImage: { 'adani-gradient':'linear-gradient(to right,#007AC3,#6A2A88,#B8205C)' },
+    boxShadow: {
+      'soft-xs':'0 1px 2px rgba(10,25,47,.04)',
+      'soft':'0 1px 3px rgba(10,25,47,.05), 0 4px 12px -2px rgba(10,25,47,.05)',
+      'soft-md':'0 4px 6px -1px rgba(10,25,47,.05), 0 10px 24px -4px rgba(10,25,47,.06)',
+      'soft-lg':'0 8px 16px -4px rgba(10,25,47,.06), 0 24px 48px -8px rgba(10,25,47,.08)'
+    }
+  }}
+}
+</script>
+    <style>
+        .stat-card { transition: transform 0.2s, box-shadow 0.2s; }
+        .stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px -6px rgba(10,25,47,0.12); }
+        .nav-link { position: relative; }
+        .nav-link.active::after { content: ''; position: absolute; bottom: -1px; left: 0; width: 100%; height: 2px; background: linear-gradient(to right, #007AC3, #6A2A88); border-radius: 2px; }
+    </style>
+<style data-ui-upgrade>
+  body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+         text-rendering:optimizeLegibility; letter-spacing:-0.006em; }
+  h1,h2,h3,h4 { letter-spacing:-0.02em; }
+  h1 { line-height:1.15; } h2,h3 { line-height:1.25; } p { line-height:1.6; }
+
+  /* Soften default text from black to slate on LIGHT pages only */
+  body[class*="F8FAFC"] { color:#334155; }
+
+  /* Tabular figures so live counters/timers don't shift width */
+  .nums, [id^="stat-"], [id^="s-"], [id^="wd-countdown-"], [id^="countdown-"] {
+    font-variant-numeric: tabular-nums; font-feature-settings:"tnum";
+  }
+
+  /* One calm transition, scoped to interactive elements */
+  a, button, input, select, textarea, [role="button"] {
+    transition: color .2s ease, background-color .2s ease, border-color .2s ease,
+                box-shadow .2s ease, transform .2s ease;
+  }
+
+  /* Keyboard-only focus ring (brand-tinted); none on mouse click */
+  :focus { outline:none; }
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+    box-shadow: 0 0 0 3px rgba(0,122,195,.30); border-radius:10px;
+  }
+
+  /* Gentle press feedback */
+  button:active, [role="button"]:active { transform: translateY(1px); }
+
+  /* Respect reduced-motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { transition-duration:.01ms!important; animation-duration:.01ms!important; scroll-behavior:auto!important; }
+  }
+</style>
+<script>
+    // ── Auth guard (runs before any other script on this page) ─────
+    (function () {
+        const token = localStorage.getItem('ims_token');
+        const userStr = localStorage.getItem('ims_user');
+
+        if (!token || !userStr) {
+            window.location.replace('login.html');
+            return;
+        }
+
+        // JWT expiry check — decode the payload without needing a library
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if (payload.exp && payload.exp * 1000 < Date.now()) {
+                localStorage.removeItem('ims_token');
+                localStorage.removeItem('ims_user');
+                window.location.replace('login.html?expired=1');
+                return;
+            }
+        } catch (e) {
+            // Malformed token → force re-login
+            localStorage.removeItem('ims_token');
+            localStorage.removeItem('ims_user');
+            window.location.replace('login.html');
+            return;
+        }
+
+        // Role gate — set inside each page's script tag via <body>
+        const user = JSON.parse(userStr);
+        const requires = document.body.getAttribute('data-requires-role');
+        if (requires) {
+            const allowed = requires.split(',').map(s => s.trim());
+            if (!allowed.includes(user.role)) {
+                window.location.replace('dashboard.html?denied=1');
+                return;
+            }
+        }
+    })();
+</script>
+<style data-qol-polish>
+  /* Slim, calm scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; border: 2px solid transparent; background-clip: content-box; }
+
+  /* Content gently fades in on load */
+  @keyframes qol-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  main { animation: qol-fade-up .35s ease-out; }
+
+  /* Cards lift slightly on hover */
+  .shadow-soft { transition: box-shadow .2s ease, transform .2s ease; }
+  .shadow-soft:hover { box-shadow: 0 6px 14px -2px rgba(10,25,47,.08), 0 16px 32px -8px rgba(10,25,47,.09); }
+
+  /* Table rows get a subtle left accent on hover */
+  tbody tr { transition: background-color .15s ease, box-shadow .15s ease; }
+  tbody tr:hover { box-shadow: inset 3px 0 0 #007AC3; }
+
+  @media (prefers-reduced-motion: reduce) { main { animation: none; } }
+</style>
+</head>
+<body class="font-body bg-[#F8FAFC] antialiased">
+
+    <nav class="fixed w-full z-50 bg-white/90 backdrop-blur-lg border-b border-slate-200/50 shadow-soft">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
+            <a href="basic.html" class="flex items-center gap-2.5">
+                <div class="w-7 h-7 rounded-md bg-adani-gradient flex items-center justify-center shadow-soft">
+                    <i class="fa-solid fa-shield-halved text-white text-xs"></i>
+                </div>
+                <span class="font-heading font-bold text-xl text-navy-900">IMS</span>
+            </a>
+            <div class="flex items-center gap-1">
+                <a href="dashboard.html" class="nav-link active px-4 py-2 rounded-full text-sm font-bold text-brand-blue">Dashboard</a>
+                <a href="tickets.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Incidents</a>
+                <a href="manager.html"  class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Manager</a>
+                <a href="sla.html"      class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">SLA</a>
+                <a href="worker.html"   class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">My Work</a>
+                <a href="analytics.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Analytics</a>
+                <button onclick="window.location.href='report.html'" class="ml-2 px-5 py-2 rounded-full text-white text-sm font-semibold bg-navy-900 hover:bg-navy-800 transition shadow-md shadow-navy-900/20 hover:-translate-y-0.5 active:translate-y-0">
+                    <i class="fa-solid fa-plus mr-1.5 text-xs"></i>Report
+                </button>
+                <div class="ml-3 flex items-center gap-2 pl-3 border-l border-slate-200">
+                    <span id="nav-user" class="hidden sm:inline text-xs text-slate-500 font-medium max-w-[110px] truncate"></span>
+                    <button onclick="if (confirm('Sign out?')) { localStorage.removeItem('ims_token'); localStorage.removeItem('ims_user'); window.location.href='login.html'; }"
+                            class="w-8 h-8 rounded-full text-slate-500 hover:text-red-600 hover:bg-red-50 transition flex items-center justify-center" title="Sign out">
+                        <i class="fa-solid fa-right-from-bracket text-xs"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="pt-28 pb-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="mb-10 flex justify-between items-end">
+            <div>
+                <p class="text-xs font-semibold text-brand-blue uppercase tracking-widest mb-1">Live Overview</p>
+                <h1 class="font-heading text-3xl font-extrabold text-navy-900">Command Dashboard</h1>
+                <p id="greeting" class="text-slate-400 text-sm mt-1.5 flex items-center gap-2">
+                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span>
+                    Operational status nominal
+                </p>
+            </div>
+            <button onclick="loadDashboard()" class="text-sm bg-white border border-slate-200 px-4 py-2 rounded-xl text-slate-600 hover:text-brand-blue hover:border-brand-blue transition shadow-soft flex items-center gap-2">
+                <i class="fa-solid fa-rotate-right"></i> Refresh
+            </button>
+        </div>
+
+        <!-- Stat Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-5 mb-10">
+            <div class="stat-card bg-white rounded-2xl p-7 shadow-soft border border-slate-200/60 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-24 h-24 bg-gradient-to-bl from-blue-50 to-transparent rounded-bl-full"></div>
+                <div class="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center mb-4">
+                    <i class="fa-solid fa-folder-open text-brand-blue text-sm"></i>
+                </div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1 relative z-10">Open</p>
+                <p id="stat-open" class="font-heading text-4xl font-extrabold text-navy-900 relative z-10">--</p>
+                <p class="text-xs text-slate-400 mt-1 relative z-10">Active incidents</p>
+            </div>
+            <div class="stat-card bg-white rounded-2xl p-7 shadow-soft border border-slate-200/60 border-b-[3px] border-b-red-500 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-24 h-24 bg-gradient-to-bl from-red-50 to-transparent rounded-bl-full"></div>
+                <div class="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center mb-4">
+                    <i class="fa-solid fa-fire text-red-500 text-sm"></i>
+                </div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1 relative z-10">Critical</p>
+                <p id="stat-critical" class="font-heading text-4xl font-extrabold text-red-600 relative z-10">--</p>
+                <p class="text-xs text-slate-400 mt-1 relative z-10">Needs immediate action</p>
+            </div>
+            <div class="stat-card bg-white rounded-2xl p-7 shadow-soft border border-slate-200/60 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-24 h-24 bg-gradient-to-bl from-amber-50 to-transparent rounded-bl-full"></div>
+                <div class="w-9 h-9 rounded-xl bg-amber-50 flex items-center justify-center mb-4">
+                    <i class="fa-solid fa-stopwatch text-amber-500 text-sm"></i>
+                </div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1 relative z-10">SLA Breaches</p>
+                <p id="stat-sla" class="font-heading text-4xl font-extrabold text-amber-500 relative z-10">--</p>
+                <p class="text-xs text-slate-400 mt-1 relative z-10">Past deadline</p>
+            </div>
+            <div class="stat-card bg-white rounded-2xl p-7 shadow-soft border border-slate-200/60 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-24 h-24 bg-gradient-to-bl from-emerald-50 to-transparent rounded-bl-full"></div>
+                <div class="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center mb-4">
+                    <i class="fa-solid fa-check-double text-emerald-500 text-sm"></i>
+                </div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1 relative z-10">Resolved Today</p>
+                <p id="stat-resolved" class="font-heading text-4xl font-extrabold text-emerald-500 relative z-10">--</p>
+                <p class="text-xs text-slate-400 mt-1 relative z-10">Closed this shift</p>
+            </div>
+        </div>
+
+        <!-- Table -->
+        <div class="bg-white rounded-3xl shadow-soft border border-slate-200/50 overflow-hidden">
+            <div class="flex justify-between items-center px-8 py-5 border-b border-slate-100">
+                <div>
+                    <h2 class="font-heading text-lg font-bold text-navy-900">Recent Activity</h2>
+                    <p class="text-xs text-slate-400 mt-0.5">Latest 10 incidents</p>
+                </div>
+                <a href="tickets.html" class="text-sm font-semibold text-brand-blue hover:text-navy-900 transition flex items-center gap-1.5">
+                    View all <i class="fa-solid fa-arrow-right text-xs"></i>
+                </a>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-slate-50/60 border-b border-slate-100">
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">ID</th>
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">Title</th>
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">Priority</th>
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">Status</th>
+                            <th class="text-left px-8 py-4 text-slate-400 font-semibold text-xs uppercase tracking-widest">Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tickets-table">
+                        <tr><td colspan="5" class="px-8 py-12 text-center text-slate-400">
+                            <i class="fa-solid fa-circle-notch fa-spin text-2xl mb-3 block text-brand-blue/40"></i>
+                            <p class="text-sm">Loading incidents...</p>
+                        </td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const API = 'http://localhost:8000';
+        const token = localStorage.getItem('token') || localStorage.getItem('ims_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const PRIORITY_COLORS = {
+    critical: 'bg-red-50 text-red-600 border border-red-200',
+    high:     'bg-orange-50 text-orange-600 border border-orange-200',
+    medium:   'bg-amber-50 text-amber-600 border border-amber-200',
+    low:      'bg-slate-50 text-slate-600 border border-slate-200'
+};
+const STATUS_COLORS = {
+    open:             'bg-blue-50 text-blue-600 border border-blue-200',
+    in_progress:      'bg-purple-50 text-purple-600 border border-purple-200',
+    critical_review:  'bg-red-50 text-red-600 border border-red-200',
+    resolved:         'bg-emerald-50 text-emerald-600 border border-emerald-200',
+    closed:           'bg-slate-50 text-slate-500 border border-slate-200'
+};
+        async function loadDashboard() {
+            try {
+                const [statsRes, ticketsRes] = await Promise.all([
+                    fetch(`${API}/dashboard/stats`, { headers }),
+                    fetch(`${API}/tickets?limit=10`, { headers })
+                ]);
+                if (statsRes.ok) {
+                    const s = await statsRes.json();
+                    document.getElementById('stat-open').textContent     = s.open ?? '--';
+                    document.getElementById('stat-critical').textContent = s.critical ?? '--';
+                    document.getElementById('stat-sla').textContent      = s.sla_breaches ?? '--';
+                    document.getElementById('stat-resolved').textContent = s.resolved_today ?? '--';
+                }
+                if (ticketsRes.ok) renderTickets(await ticketsRes.json());
+                document.getElementById('greeting').innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"></span> Last synced: ${new Date().toLocaleTimeString()}`;
+            } catch (e) {
+                document.getElementById('greeting').innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-red-400 inline-block"></span> API offline`;
+                document.getElementById('tickets-table').innerHTML = `<tr><td colspan="5" class="px-8 py-12 text-center text-slate-400 text-sm">Cannot reach FastAPI server.</td></tr>`;
+            }
+        }
+        function renderTickets(tickets) {
+            if (!tickets.length) {
+                document.getElementById('tickets-table').innerHTML = '<tr><td colspan="5" class="px-8 py-12 text-center text-slate-400 text-sm">No incidents yet.</td></tr>';
+                return;
+            }
+            document.getElementById('tickets-table').innerHTML = tickets.map(t => `
+                <tr onclick="window.location.href='tickets.html?id=${t.id}'" class="border-b border-slate-50 hover:bg-slate-50/70 cursor-pointer transition-colors">
+                    <td class="px-8 py-5 text-slate-400 font-mono text-xs">#${t.id}</td>
+                    <td class="px-8 py-5 text-navy-900 font-semibold">${t.title}</td>
+                    <td class="px-8 py-5"><span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${PRIORITY_COLORS[t.priority] || 'bg-slate-100 text-slate-600'}">${t.priority}</span></td>
+                    <td class="px-8 py-5"><span class="px-2.5 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${STATUS_COLORS[t.status] || 'bg-slate-100 text-slate-600'}">${t.status?.replace('_', ' ')}</span></td>
+                    <td class="px-8 py-5 text-slate-400 text-xs font-medium">${new Date(t.created_at).toLocaleDateString()}</td>
+                </tr>`).join('');
+        }
+        loadDashboard();
+    </script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+<script>
+    // ── Nav: show current user name + wire sign-out ─────────
+    (function () {
+        const el = document.getElementById('nav-user');
+        if (!el) return;
+        try {
+            const u = JSON.parse(localStorage.getItem('ims_user') || '{}');
+            if (u.full_name) el.textContent = u.full_name;
+        } catch (e) { /* ignore */ }
+    })();
+</script>
+</body>
+</html>

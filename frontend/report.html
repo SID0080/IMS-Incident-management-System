@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+    // ── Per-tab session isolation ─────────────────────────────
+    // sessionStorage is scoped to a single tab, so different tabs can be
+    // signed in as different users at the same time — useful for demos.
+    // We shim just the two IMS auth keys; everything else on localStorage
+    // still works normally.
+    (function () {
+        const KEYS = new Set(['ims_token', 'ims_user']);
+        const _get = localStorage.getItem.bind(localStorage);
+        const _set = localStorage.setItem.bind(localStorage);
+        const _del = localStorage.removeItem.bind(localStorage);
+        localStorage.getItem    = k => KEYS.has(k) ? sessionStorage.getItem(k)      : _get(k);
+        localStorage.setItem    = (k, v) => KEYS.has(k) ? sessionStorage.setItem(k, v) : _set(k, v);
+        localStorage.removeItem = k => KEYS.has(k) ? sessionStorage.removeItem(k)   : _del(k);
+    })();
+</script>
+
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMS | Report Incident</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- html5-qrcode for camera barcode/QR scanning -->
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { heading:['Outfit','sans-serif'], body:['Inter','sans-serif'] },
+    colors: {
+      navy:  { 900:'#0A192F', 800:'#112240', 700:'#1C3454' },
+      brand: { blue:'#007AC3', purple:'#6A2A88', magenta:'#B8205C' },
+      ink:   { DEFAULT:'#0F172A', soft:'#334155', muted:'#64748B', faint:'#94A3B8' }
+    },
+    backgroundImage: { 'adani-gradient':'linear-gradient(to right,#007AC3,#6A2A88,#B8205C)' },
+    boxShadow: {
+      'soft-xs':'0 1px 2px rgba(10,25,47,.04)',
+      'soft':'0 1px 3px rgba(10,25,47,.05), 0 4px 12px -2px rgba(10,25,47,.05)',
+      'soft-md':'0 4px 6px -1px rgba(10,25,47,.05), 0 10px 24px -4px rgba(10,25,47,.06)',
+      'soft-lg':'0 8px 16px -4px rgba(10,25,47,.06), 0 24px 48px -8px rgba(10,25,47,.08)'
+    }
+  }}
+}
+</script>
+    <style>
+        .form-field { transition: all 0.2s; }
+        .form-field:focus { border-color: #007AC3; box-shadow: 0 0 0 3px rgba(0,122,195,0.12); outline: none; }
+        #qr-modal { transition: all 0.3s; }
+        #qr-reader { border-radius: 16px; overflow: hidden; }
+        #qr-reader video { border-radius: 16px; }
+        .scan-success { animation: flash-green 0.5s ease; }
+        @keyframes flash-green { 0%,100%{background:transparent} 50%{background:rgba(16,185,129,0.1)} }
+        .priority-btn { transition: all 0.15s; border: 2px solid transparent; }
+        .priority-btn.selected { transform: translateY(-1px); }
+        #toast { transition: all 0.3s; }
+    </style>
+<style data-ui-upgrade>
+  body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+         text-rendering:optimizeLegibility; letter-spacing:-0.006em; }
+  h1,h2,h3,h4 { letter-spacing:-0.02em; }
+  h1 { line-height:1.15; } h2,h3 { line-height:1.25; } p { line-height:1.6; }
+
+  /* Soften default text from black to slate on LIGHT pages only */
+  body[class*="F8FAFC"] { color:#334155; }
+
+  /* Tabular figures so live counters/timers don't shift width */
+  .nums, [id^="stat-"], [id^="s-"], [id^="wd-countdown-"], [id^="countdown-"] {
+    font-variant-numeric: tabular-nums; font-feature-settings:"tnum";
+  }
+
+  /* One calm transition, scoped to interactive elements */
+  a, button, input, select, textarea, [role="button"] {
+    transition: color .2s ease, background-color .2s ease, border-color .2s ease,
+                box-shadow .2s ease, transform .2s ease;
+  }
+
+  /* Keyboard-only focus ring (brand-tinted); none on mouse click */
+  :focus { outline:none; }
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+    box-shadow: 0 0 0 3px rgba(0,122,195,.30); border-radius:10px;
+  }
+
+  /* Gentle press feedback */
+  button:active, [role="button"]:active { transform: translateY(1px); }
+
+  /* Respect reduced-motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { transition-duration:.01ms!important; animation-duration:.01ms!important; scroll-behavior:auto!important; }
+  }
+</style>
+<style data-qol-polish>
+  /* Slim, calm scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; border: 2px solid transparent; background-clip: content-box; }
+
+  /* Content gently fades in on load */
+  @keyframes qol-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  main { animation: qol-fade-up .35s ease-out; }
+
+  /* Cards lift slightly on hover (scoped to existing rounded cards) */
+  .shadow-soft { transition: box-shadow .2s ease, transform .2s ease; }
+  .shadow-soft:hover { box-shadow: 0 6px 14px -2px rgba(10,25,47,.08), 0 16px 32px -8px rgba(10,25,47,.09); }
+
+  /* Table rows get a subtle left accent on hover */
+  tbody tr { transition: background-color .15s ease, box-shadow .15s ease; }
+  tbody tr:hover { box-shadow: inset 3px 0 0 #007AC3; }
+
+  @media (prefers-reduced-motion: reduce) { main { animation: none; } }
+</style>
+<script>
+    // ── Auth guard (runs before any other script on this page) ─────
+    (function () {
+        const token = localStorage.getItem('ims_token');
+        const userStr = localStorage.getItem('ims_user');
+
+        if (!token || !userStr) {
+            window.location.replace('login.html');
+            return;
+        }
+
+        // JWT expiry check — decode the payload without needing a library
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if (payload.exp && payload.exp * 1000 < Date.now()) {
+                localStorage.removeItem('ims_token');
+                localStorage.removeItem('ims_user');
+                window.location.replace('login.html?expired=1');
+                return;
+            }
+        } catch (e) {
+            // Malformed token → force re-login
+            localStorage.removeItem('ims_token');
+            localStorage.removeItem('ims_user');
+            window.location.replace('login.html');
+            return;
+        }
+
+        // Role gate — set inside each page's script tag via <body>
+        const user = JSON.parse(userStr);
+        const requires = document.body.getAttribute('data-requires-role');
+        if (requires) {
+            const allowed = requires.split(',').map(s => s.trim());
+            if (!allowed.includes(user.role)) {
+                window.location.replace('dashboard.html?denied=1');
+                return;
+            }
+        }
+    })();
+</script>
+</head>
+<body class="font-body bg-[#F8FAFC] antialiased">
+
+    <!-- Nav -->
+    <nav class="fixed w-full z-50 bg-white/90 backdrop-blur-lg border-b border-slate-200/50 shadow-soft">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
+            <a href="basic.html" class="flex items-center gap-2.5">
+                <div class="w-7 h-7 rounded-md bg-adani-gradient flex items-center justify-center shadow-soft">
+                    <i class="fa-solid fa-shield-halved text-white text-xs"></i>
+                </div>
+                <span class="font-heading font-bold text-xl text-navy-900">IMS</span>
+            </a>
+            <div class="flex items-center gap-1">
+                <a href="dashboard.html"  class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Dashboard</a>
+                <a href="tickets.html"    class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Incidents</a>
+                <a href="manager.html"    class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Manager</a>
+                <a href="sla.html"        class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">SLA</a>
+                <a href="worker.html"     class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">My Work</a>
+                <a href="analytics.html"  class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Analytics</a>
+                <a href="report.html"     class="px-4 py-2 rounded-full text-sm font-bold text-brand-blue">Report</a>
+                <div class="ml-3 flex items-center gap-2 pl-3 border-l border-slate-200">
+                    <span id="nav-user" class="hidden sm:inline text-xs text-slate-500 font-medium max-w-[110px] truncate"></span>
+                    <button onclick="if (confirm('Sign out?')) { localStorage.removeItem('ims_token'); localStorage.removeItem('ims_user'); window.location.href='login.html'; }"
+                            class="w-8 h-8 rounded-full text-slate-500 hover:text-red-600 hover:bg-red-50 transition flex items-center justify-center" title="Sign out">
+                        <i class="fa-solid fa-right-from-bracket text-xs"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Toast -->
+    <div id="toast" class="fixed top-20 right-6 z-[200] px-5 py-3.5 rounded-2xl shadow-xl text-sm font-semibold flex items-center gap-2.5 opacity-0 pointer-events-none">
+        <i id="toast-icon" class="text-base"></i><span id="toast-msg"></span>
+    </div>
+
+    <!-- Success Modal with Download Receipt -->
+    <div id="success-modal" class="fixed inset-0 z-[150] bg-navy-900/70 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden text-center">
+            <div class="p-8">
+                <div class="w-16 h-16 rounded-full bg-emerald-50 flex items-center justify-center mx-auto mb-4">
+                    <i class="fa-solid fa-check text-emerald-500 text-2xl"></i>
+                </div>
+                <h3 class="font-heading text-xl font-extrabold text-navy-900 mb-1">Incident Reported</h3>
+                <p id="success-ref-id" class="text-xs text-slate-400 font-mono mb-5"></p>
+                <p class="text-sm text-slate-500 mb-6">
+                    Your incident has been submitted and routed automatically.
+                    Download a receipt for your records.
+                </p>
+                <button onclick="downloadReceipt()"
+                    class="w-full py-3 rounded-2xl bg-navy-900 text-white text-sm font-bold hover:bg-navy-800 transition flex items-center justify-center gap-2 mb-3">
+                    <i class="fa-solid fa-file-arrow-down"></i> Download Receipt (PDF)
+                </button>
+                <div class="grid grid-cols-2 gap-3">
+                    <button onclick="closeSuccessModal()"
+                        class="py-3 rounded-2xl bg-slate-100 text-slate-600 text-sm font-semibold hover:bg-slate-200 transition">
+                        <i class="fa-solid fa-xmark mr-1.5 text-slate-400"></i>Close
+                    </button>
+                    <button onclick="closeSuccessModal(); document.getElementById('title').focus();"
+                        class="py-3 rounded-2xl bg-brand-blue/10 text-brand-blue text-sm font-semibold hover:bg-brand-blue/20 transition">
+                        <i class="fa-solid fa-plus mr-1.5"></i>Submit Another
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- QR Scanner Modal -->
+    <div id="qr-modal" class="fixed inset-0 z-[100] bg-navy-900/80 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden">
+            <!-- Modal header -->
+            <div class="px-6 py-5 border-b border-slate-100 flex justify-between items-center">
+                <div>
+                    <h3 class="font-heading font-bold text-navy-900">Scan Equipment</h3>
+                    <p class="text-xs text-slate-400 mt-0.5">Point camera at equipment QR code or barcode</p>
+                </div>
+                <button onclick="closeScanner()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition">
+                    <i class="fa-solid fa-xmark text-slate-600 text-sm"></i>
+                </button>
+            </div>
+
+            <!-- Camera feed -->
+            <div class="p-4">
+                <div id="qr-reader" class="w-full rounded-2xl overflow-hidden bg-slate-900" style="min-height:240px;"></div>
+            </div>
+
+            <!-- Scanner error -->
+            <div id="scan-error" class="hidden px-6 pb-4">
+                <div class="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-2.5">
+                    <i class="fa-solid fa-triangle-exclamation text-red-500 mt-0.5"></i>
+                    <span class="text-red-600 text-xs leading-relaxed"></span>
+                </div>
+            </div>
+
+            <!-- Scan result -->
+            <div id="scan-result" class="hidden px-6 pb-5">
+                <div class="bg-emerald-50 border border-emerald-200 rounded-2xl p-4">
+                    <div class="flex items-center gap-2 mb-2">
+                        <i class="fa-solid fa-circle-check text-emerald-500"></i>
+                        <span class="text-emerald-700 font-semibold text-sm">Equipment Detected</span>
+                    </div>
+                    <p id="scan-result-text" class="text-emerald-600 text-xs font-mono break-all"></p>
+                </div>
+                <button onclick="applyScanData()" class="w-full mt-3 py-3 rounded-2xl bg-navy-900 text-white text-sm font-bold hover:bg-navy-800 transition">
+                    <i class="fa-solid fa-file-import mr-2"></i>Fill Form with This Data
+                </button>
+            </div>
+
+            <!-- Instructions -->
+            <div class="px-6 pb-5 text-center">
+                <p class="text-xs text-slate-400">
+                    <i class="fa-solid fa-qrcode mr-1"></i>
+                    Supports QR codes and standard barcodes.
+                    Equipment QR format: <code class="bg-slate-100 px-1 rounded text-[10px]">JSON or PIPE-separated</code>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <main class="pt-28 pb-16 max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <!-- Header -->
+        <div class="mb-8">
+            <p class="text-xs font-semibold text-brand-blue uppercase tracking-widest mb-1">Submit Incident</p>
+            <h1 class="font-heading text-3xl font-extrabold text-navy-900">Report an Incident</h1>
+            <p class="text-slate-400 text-sm mt-1.5">Fill in the details below. High and Critical incidents are auto-assigned immediately.</p>
+        </div>
+
+        <div class="bg-white rounded-3xl shadow-soft border border-slate-200/50 p-8">
+
+            <!-- QR Scanner trigger -->
+            <div class="mb-6 p-4 bg-slate-50 rounded-2xl border border-slate-200 border-dashed flex items-center justify-between gap-4">
+                <div>
+                    <p class="font-semibold text-navy-900 text-sm flex items-center gap-2">
+                        <i class="fa-solid fa-qrcode text-brand-blue"></i>
+                        Have equipment details on a QR/barcode?
+                    </p>
+                    <p class="text-xs text-slate-400 mt-0.5">Scan to auto-fill the form instantly.</p>
+                </div>
+                <button onclick="openScanner()" id="scan-btn"
+                    class="flex-shrink-0 px-4 py-2.5 rounded-xl bg-navy-900 text-white text-sm font-semibold hover:bg-navy-800 transition flex items-center gap-2">
+                    <i class="fa-solid fa-camera"></i> Scan Equipment
+                </button>
+            </div>
+
+            <!-- Scanned equipment badge (shown after successful scan) -->
+            <div id="scanned-badge" class="hidden mb-6 p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-3">
+                <div class="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                    <i class="fa-solid fa-barcode text-emerald-600 text-sm"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="text-emerald-700 text-xs font-semibold">Equipment Scanned</p>
+                    <p id="scanned-equipment-id" class="text-emerald-600 text-xs font-mono truncate"></p>
+                </div>
+                <button onclick="clearScan()" class="text-slate-400 hover:text-red-500 transition">
+                    <i class="fa-solid fa-xmark text-sm"></i>
+                </button>
+            </div>
+
+            <form id="incident-form" class="space-y-6">
+
+                <!-- Title -->
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2">
+                        Incident Title <span class="text-red-400">*</span>
+                    </label>
+                    <input id="title" type="text" placeholder="Brief description of the incident"
+                        minlength="3" maxlength="255"
+                        class="form-field w-full px-4 py-3 rounded-2xl border border-slate-200 text-navy-900 text-sm placeholder-slate-400 bg-slate-50 focus:bg-white transition">
+                </div>
+
+                <!-- Description -->
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2">
+                        Detailed Description <span class="text-red-400">*</span>
+                    </label>
+                    <textarea id="description" rows="4" oninput="updateDescCount()" placeholder="Describe what happened, what you observed, and any immediate impact..."
+                        minlength="10"
+                        class="form-field w-full px-4 py-3 rounded-2xl border border-slate-200 text-navy-900 text-sm placeholder-slate-400 bg-slate-50 focus:bg-white transition resize-none"></textarea>
+                    <p id="desc-count" class="text-[10px] text-slate-400 mt-1 text-right">0 characters · minimum 10</p>
+                </div>
+
+                <!-- Priority buttons -->
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-3">
+                        Priority <span class="text-red-400">*</span>
+                    </label>
+                    <div class="grid grid-cols-4 gap-3">
+                        <button type="button" onclick="setPriority('low')" id="prio-low"
+                            class="priority-btn p-3 rounded-2xl border-2 border-slate-200 bg-slate-50 hover:border-slate-400 text-center">
+                            <p class="text-xs font-bold text-slate-600 uppercase">Low</p>
+                            <p class="text-[10px] text-slate-400 mt-0.5">24 hrs · L1</p>
+                        </button>
+                        <button type="button" onclick="setPriority('medium')" id="prio-medium"
+                            class="priority-btn p-3 rounded-2xl border-2 border-amber-200 bg-amber-50 hover:border-amber-400 text-center">
+                            <p class="text-xs font-bold text-amber-600 uppercase">Medium</p>
+                            <p class="text-[10px] text-amber-400 mt-0.5">8 hrs · L1</p>
+                        </button>
+                        <button type="button" onclick="setPriority('high')" id="prio-high"
+                            class="priority-btn p-3 rounded-2xl border-2 border-orange-200 bg-orange-50 hover:border-orange-400 text-center">
+                            <p class="text-xs font-bold text-orange-600 uppercase">High</p>
+                            <p class="text-[10px] text-orange-400 mt-0.5">2 hrs · L2</p>
+                        </button>
+                        <button type="button" onclick="setPriority('critical')" id="prio-critical"
+                            class="priority-btn p-3 rounded-2xl border-2 border-red-200 bg-red-50 hover:border-red-400 text-center">
+                            <p class="text-xs font-bold text-red-600 uppercase">Critical</p>
+                            <p class="text-[10px] text-red-400 mt-0.5">30 min · L3</p>
+                        </button>
+                    </div>
+                    <input type="hidden" id="priority" value="medium">
+                </div>
+
+                <!-- Terminal + Location -->
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-700 mb-2">
+                            Terminal <span class="text-red-400">*</span>
+                        </label>
+                        <div class="relative">
+                            <i class="fa-solid fa-plane absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none z-10"></i>
+                            <select id="terminal"
+                                class="form-field w-full pl-11 pr-8 py-3 rounded-2xl border border-slate-200 text-navy-900 text-sm bg-slate-50 focus:bg-white transition appearance-none"
+                                style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath fill='%2394a3b8' d='M5 7L1 2h8z'/%3E%3C/svg%3E&quot;);background-repeat:no-repeat;background-position:right 16px center;">
+                                <option value="">Select terminal...</option>
+                                <option value="T2">Terminal 2 (T2)</option>
+                                <option value="T3">Terminal 3 (T3)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-700 mb-2">Specific Location</label>
+                        <div class="relative">
+                            <i class="fa-solid fa-location-dot absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                            <input id="location" type="text" placeholder="Gate, floor, counter..."
+                                class="form-field w-full pl-11 pr-4 py-3 rounded-2xl border border-slate-200 text-navy-900 text-sm placeholder-slate-400 bg-slate-50 focus:bg-white transition">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Device + Common Problem -->
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-700 mb-2">
+                            Device
+                            <span class="text-slate-400 font-normal ml-1">— what's affected?</span>
+                        </label>
+                        <div class="relative">
+                            <i class="fa-solid fa-desktop absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none z-10"></i>
+                            <select id="device-type" onchange="onDeviceChange()"
+                                class="form-field w-full pl-11 pr-8 py-3 rounded-2xl border border-slate-200 text-navy-900 text-sm bg-slate-50 focus:bg-white transition appearance-none"
+                                style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath fill='%2394a3b8' d='M5 7L1 2h8z'/%3E%3C/svg%3E&quot;);background-repeat:no-repeat;background-position:right 16px center;">
+                                <option value="">Select device...</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-slate-700 mb-2">
+                            Common Problem
+                            <span class="text-slate-400 font-normal ml-1">— optional</span>
+                        </label>
+                        <div class="relative">
+                            <i class="fa-solid fa-triangle-exclamation absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none z-10"></i>
+                            <select id="device-problem" onchange="onProblemChange()" disabled
+                                class="form-field w-full pl-11 pr-8 py-3 rounded-2xl border border-slate-200 text-navy-900 text-sm bg-slate-50 focus:bg-white transition appearance-none disabled:opacity-50 disabled:cursor-not-allowed"
+                                style="background-image:url(&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath fill='%2394a3b8' d='M5 7L1 2h8z'/%3E%3C/svg%3E&quot;);background-repeat:no-repeat;background-position:right 16px center;">
+                                <option value="">Select device first...</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Equipment Model Number -->
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2">
+                        Equipment Model Number
+                        <span class="text-slate-400 font-normal ml-1">— optional, helps asset tracking</span>
+                    </label>
+                    <div class="relative">
+                        <i class="fa-solid fa-barcode absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
+                        <input id="equipment-model" type="text" placeholder="e.g. HP LaserJet M404dn, Dell Latitude 5420"
+                            class="form-field w-full pl-11 pr-4 py-3 rounded-2xl border border-slate-200 text-navy-900 text-sm placeholder-slate-400 bg-slate-50 focus:bg-white transition">
+                    </div>
+                </div>
+
+                <!-- Image upload -->
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2">
+                        Photo Evidence
+                        <span class="text-slate-400 font-normal ml-1">— optional, analysed by AI</span>
+                    </label>
+                    <label class="block cursor-pointer">
+                        <div id="upload-area" class="border-2 border-dashed border-slate-200 rounded-2xl p-7 text-center hover:border-brand-blue hover:bg-blue-50/30 transition">
+                            <i class="fa-solid fa-cloud-arrow-up text-2xl text-slate-300 mb-2 block"></i>
+                            <p class="text-sm text-slate-500">Click to upload or drag & drop</p>
+                            <p class="text-xs text-slate-400 mt-1">JPG, PNG up to 10MB</p>
+                        </div>
+                        <input id="image" type="file" accept=".jpg,.jpeg,.png" class="hidden" onchange="handleFileSelect(event)">
+                    </label>
+                    <div id="file-preview" class="hidden mt-3 p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center gap-3">
+                        <i class="fa-solid fa-image text-brand-blue flex-shrink-0"></i>
+                        <span id="file-name" class="text-sm text-slate-600 truncate flex-1"></span>
+                        <button type="button" onclick="clearFile()" class="text-slate-400 hover:text-red-500 transition">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Submit -->
+                <div class="pt-2">
+                    <button type="submit" id="submit-btn"
+                        class="w-full py-4 rounded-2xl text-white font-bold bg-gradient-to-r from-brand-blue via-brand-purple to-brand-magenta hover:opacity-90 transition-all shadow-lg hover:-translate-y-0.5 active:translate-y-0 text-sm tracking-wide">
+                        <i class="fa-solid fa-paper-plane mr-2"></i> Submit Incident Report
+                    </button>
+                    <p class="text-center text-xs text-slate-400 mt-3">
+                        High & Critical incidents are auto-assigned to workers immediately.
+                    </p>
+                </div>
+            </form>
+        </div>
+    </main>
+
+<script>
+    const API   = 'http://localhost:8000';
+    const token = localStorage.getItem('token') || localStorage.getItem('ims_token');
+    const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+    let selectedPriority = 'medium';
+    let scannedData      = null;
+    let html5QrScanner   = null;
+    let lastReceipt      = null;   // populated after successful submit, used by downloadReceipt()
+
+    // ── Priority buttons ──────────────────────────────────
+    const PRIORITY_SELECTED = {
+        low:      'border-slate-500 bg-slate-100 shadow-md',
+        medium:   'border-amber-500 bg-amber-100 shadow-md',
+        high:     'border-orange-500 bg-orange-100 shadow-md',
+        critical: 'border-red-500 bg-red-100 shadow-md',
+    };
+
+    function setPriority(p) {
+        selectedPriority = p;
+        document.getElementById('priority').value = p;
+        ['low','medium','high','critical'].forEach(pr => {
+            const btn = document.getElementById(`prio-${pr}`);
+            btn.classList.remove('shadow-md', 'border-slate-500', 'border-amber-500',
+                                 'border-orange-500', 'border-red-500',
+                                 'bg-slate-100', 'bg-amber-100', 'bg-orange-100', 'bg-red-100',
+                                 'selected');
+            if (pr === p) {
+                btn.classList.add('selected', ...PRIORITY_SELECTED[pr].split(' '));
+            }
+        });
+    }
+
+    // Set medium as default selected
+    setPriority('medium');
+
+    // ── Description character counter ─────────────────────
+    function updateDescCount() {
+        const len = document.getElementById('description').value.trim().length;
+        const el  = document.getElementById('desc-count');
+        if (len === 0)      { el.textContent = '0 characters · minimum 10'; el.className = 'text-[10px] text-slate-400 mt-1 text-right'; }
+        else if (len < 10)  { el.textContent = `${len} characters · ${10 - len} more needed`; el.className = 'text-[10px] text-amber-500 mt-1 text-right font-semibold'; }
+        else                { el.textContent = `${len} characters ✓`; el.className = 'text-[10px] text-emerald-500 mt-1 text-right font-semibold'; }
+    }
+
+    document.getElementById('incident-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await submitIncident();
+    });
+
+    // ── File upload ───────────────────────────────────────
+    function handleFileSelect(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        document.getElementById('file-name').textContent = file.name;
+        document.getElementById('file-preview').classList.remove('hidden');
+        document.getElementById('upload-area').classList.add('border-brand-blue', 'bg-blue-50/30');
+    }
+
+    function clearFile() {
+        document.getElementById('image').value = '';
+        document.getElementById('file-preview').classList.add('hidden');
+        document.getElementById('upload-area').classList.remove('border-brand-blue', 'bg-blue-50/30');
+    }
+
+    // ── QR / Barcode Scanner ──────────────────────────────
+    function showScannerError(msg) {
+        const box = document.getElementById('scan-error');
+        box.querySelector('span').textContent = msg;
+        box.classList.remove('hidden');
+    }
+
+    function openScanner() {
+        document.getElementById('qr-modal').classList.remove('hidden');
+        document.getElementById('scan-result').classList.add('hidden');
+        document.getElementById('scan-error').classList.add('hidden');
+
+        // 1) Did the html5-qrcode library actually load?
+        if (typeof Html5QrcodeScanner === 'undefined') {
+            showScannerError('Scanner library failed to load. Check your internet connection — ' +
+                'the html5-qrcode CDN is blocked or offline — then reopen the scanner.');
+            return;
+        }
+
+        // 2) Camera needs a SECURE CONTEXT: https:// OR localhost / 127.0.0.1.
+        //    Opening the page by double-clicking the file (file://) blocks the
+        //    camera in every modern browser — this is the most common cause of
+        //    "the scanner does nothing".
+        const host = location.hostname;
+        const secure = window.isSecureContext || host === 'localhost' || host === '127.0.0.1';
+        if (!secure) {
+            showScannerError(
+                'Camera blocked. Browsers only allow the camera over https or localhost. ' +
+                'You appear to have opened this file directly (file://). Serve the frontend instead — ' +
+                'e.g. run  "python -m http.server 5500"  inside the frontend folder, then open  ' +
+                'http://localhost:5500/report.html'
+            );
+            return;
+        }
+
+        const config = {
+            fps: 10,
+            qrbox: { width: 250, height: 250 },
+            aspectRatio: 1.0,
+            rememberLastUsedCamera: true,
+            // Scan BOTH QR codes and common 1-D barcodes (not just QR).
+            formatsToSupport: [
+                Html5QrcodeSupportedFormats.QR_CODE,
+                Html5QrcodeSupportedFormats.CODE_128,
+                Html5QrcodeSupportedFormats.CODE_39,
+                Html5QrcodeSupportedFormats.EAN_13,
+                Html5QrcodeSupportedFormats.EAN_8,
+                Html5QrcodeSupportedFormats.UPC_A,
+                Html5QrcodeSupportedFormats.UPC_E,
+                Html5QrcodeSupportedFormats.ITF,
+            ],
+            // Use the browser's native BarcodeDetector when present — far more
+            // reliable for 1-D barcodes than the JS fallback.
+            experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+        };
+
+        try {
+            html5QrScanner = new Html5QrcodeScanner("qr-reader", config, false);
+            html5QrScanner.render(onScanSuccess, onScanError);
+        } catch (e) {
+            showScannerError('Could not start the scanner: ' + (e && e.message ? e.message : e));
+        }
+    }
+
+    function closeScanner() {
+        if (html5QrScanner) {
+            html5QrScanner.clear().catch(() => {});
+            html5QrScanner = null;
+        }
+        document.getElementById('qr-modal').classList.add('hidden');
+        document.getElementById('scan-error').classList.add('hidden');
+        scannedData = null;
+    }
+
+    function onScanSuccess(decodedText) {
+        // Stop scanning immediately
+        if (html5QrScanner) {
+            html5QrScanner.pause(true);
+        }
+
+        scannedData = decodedText;
+        document.getElementById('scan-result-text').textContent = decodedText;
+        document.getElementById('scan-result').classList.remove('hidden');
+
+        showToast('QR code detected!', 'success');
+    }
+
+    function onScanError(err) {
+        // Silently ignore scan errors (camera searching)
+    }
+
+    function applyScanData() {
+        if (!scannedData) return;
+
+        let parsed = { equipment_id: null, location: null, description: null };
+
+        // Try JSON format first
+        try {
+            const json = JSON.parse(scannedData);
+            parsed.equipment_id = json.equipment_id || json.id || json.asset_id || null;
+            parsed.location     = json.location     || json.loc  || null;
+            parsed.description  = json.description  || json.desc || null;
+        } catch {
+            // Try pipe-separated: equipment_id|location|description
+            const parts = scannedData.split('|');
+            if (parts.length >= 1) parsed.equipment_id = parts[0].trim() || null;
+            if (parts.length >= 2) parsed.location     = parts[1].trim() || null;
+            if (parts.length >= 3) parsed.description  = parts[2].trim() || null;
+        }
+
+        // Fill form fields
+        if (parsed.equipment_id) {
+            const title = document.getElementById('title');
+            if (!title.value) {
+                title.value = `Equipment Fault: ${parsed.equipment_id}`;
+            }
+            document.getElementById('scanned-equipment-id').textContent = `ID: ${parsed.equipment_id}`;
+        }
+
+        if (parsed.location) {
+            document.getElementById('location').value = parsed.location;
+        }
+
+        if (parsed.description) {
+            const desc = document.getElementById('description');
+            const prefix = parsed.equipment_id ? `[${parsed.equipment_id}] ` : '';
+            if (!desc.value) {
+                desc.value = prefix + parsed.description;
+            }
+        }
+
+        // Show scanned badge
+        document.getElementById('scanned-badge').classList.remove('hidden');
+        document.getElementById('incident-form').classList.add('scan-success');
+        setTimeout(() => document.getElementById('incident-form').classList.remove('scan-success'), 500);
+
+        closeScanner();
+        showToast('Form auto-filled from equipment data', 'success');
+    }
+
+    function clearScan() {
+        scannedData = null;
+        document.getElementById('scanned-badge').classList.add('hidden');
+    }
+
+    // ── Device + Common Problem dropdowns ─────────────────
+    // Airport-specific device catalogue. Add/remove devices here — no
+    // backend change needed (device_type is a plain string column).
+    const DEVICE_PROBLEMS = {
+        "Desktop / Laptop":        ["Won't power on", "Extremely slow / freezing", "Blue screen / crashes", "No network connection", "Login / password issue", "Peripheral not detected"],
+        "Printer":                 ["Paper jam", "Not printing / offline", "Toner or ink low", "Poor print quality", "Not visible on network"],
+        "Monitor / Display":       ["No display / black screen", "Flickering or distorted image", "Dead pixels / lines on screen", "Wrong resolution"],
+        "Network Switch / Router": ["No internet connectivity", "Intermittent connection drops", "Slow network speed", "Port not working"],
+        "CCTV Camera":             ["No video feed", "Blurry / obstructed view", "Camera offline", "Recording failure", "Physical damage"],
+        "X-ray Baggage Scanner":   ["Conveyor not moving", "Image not displaying", "Calibration error", "Emergency stop triggered", "Abnormal noise"],
+        "Baggage Belt / Carousel": ["Belt stopped", "Belt running at wrong speed", "Unusual noise / vibration", "Baggage jam", "Motor overheating"],
+        "Boarding Gate Display":   ["Screen blank", "Showing wrong flight info", "Frozen / unresponsive", "Physical damage"],
+        "Access Control Gate":     ["Card reader not responding", "Gate stuck open/closed", "Boarding pass scanner failure", "Alarm malfunction"],
+        "Metal Detector / DFMD":   ["Not detecting", "False alarms", "Display error", "Power issue"],
+        "Walkie-Talkie / Radio":   ["No signal / static", "Battery not charging", "Broken antenna or casing"],
+        "HVAC / AC Unit":          ["Not cooling", "Water leakage", "Unusual noise", "Completely off"],
+        "Elevator / Escalator":    ["Stopped / stuck", "Unusual noise", "Door malfunction", "Emergency alarm active"],
+        "Telephone / Intercom":    ["No dial tone", "Can't make/receive calls", "Poor audio quality"],
+        "UPS / Power Backup":      ["Not switching over on power cut", "Battery alarm beeping", "Overheating"],
+        "Other Equipment":         []
+    };
+
+    let titleWasAutofilled = false;
+
+    function initDeviceDropdown() {
+        const sel = document.getElementById('device-type');
+        Object.keys(DEVICE_PROBLEMS).forEach(d => {
+            const opt = document.createElement('option');
+            opt.value = d; opt.textContent = d;
+            sel.appendChild(opt);
+        });
+    }
+
+    function onDeviceChange() {
+        const device   = document.getElementById('device-type').value;
+        const probSel  = document.getElementById('device-problem');
+        probSel.innerHTML = '';
+        const problems = DEVICE_PROBLEMS[device] || [];
+
+        if (!device) {
+            probSel.disabled = true;
+            probSel.innerHTML = '<option value="">Select device first...</option>';
+            return;
+        }
+        if (problems.length === 0) {
+            probSel.disabled = true;
+            probSel.innerHTML = '<option value="">Describe the problem below</option>';
+            return;
+        }
+        probSel.disabled = false;
+        const first = document.createElement('option');
+        first.value = ''; first.textContent = 'Select the problem...';
+        probSel.appendChild(first);
+        problems.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p; opt.textContent = p;
+            probSel.appendChild(opt);
+        });
+        const other = document.createElement('option');
+        other.value = 'Other issue'; other.textContent = 'Other issue (describe below)';
+        probSel.appendChild(other);
+    }
+
+    function onProblemChange() {
+        // Prefill the title from device + problem (only if the user hasn't
+        // typed their own title). This also feeds the text-ML categorizer
+        // cleaner input → better auto-routing.
+        const device  = document.getElementById('device-type').value;
+        const problem = document.getElementById('device-problem').value;
+        const titleEl = document.getElementById('title');
+        if (!device || !problem || problem === 'Other issue') return;
+        if (titleEl.value.trim() === '' || titleWasAutofilled) {
+            titleEl.value = `${device} — ${problem}`;
+            titleWasAutofilled = true;
+        }
+    }
+
+    // ── Submit ────────────────────────────────────────────
+    async function submitIncident() {
+        const token = localStorage.getItem('token') || localStorage.getItem('ims_token');
+        if (!token) {
+            showToast('You must be logged in to report an incident.', 'error');
+            window.location.href = '/login.html';
+            return;
+        }
+
+        const title         = document.getElementById('title').value.trim();
+        const description   = document.getElementById('description').value.trim();
+        const priority       = selectedPriority;
+        const terminal       = document.getElementById('terminal').value;
+        const location       = document.getElementById('location').value.trim();
+        const equipmentModel = document.getElementById('equipment-model').value.trim();
+        const deviceType     = document.getElementById('device-type').value;
+        const imageFile      = document.getElementById('image').files[0];
+        const btn            = document.getElementById('submit-btn');
+
+        if (!title || title.length < 3)       { showToast('Title must be at least 3 characters.', 'error'); return; }
+        if (!description || description.length < 10) { showToast('Description must be at least 10 characters.', 'error'); return; }
+        if (!terminal) { showToast('Please select a terminal (T2 or T3).', 'error'); return; }
+
+        btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-2"></i> Submitting...';
+        btn.disabled = true;
+
+        const form = new FormData();
+        form.append('title',       title);
+        form.append('description', description);
+        form.append('priority',    priority);
+        form.append('terminal',    terminal);
+        if (location)        form.append('location', location);
+        if (equipmentModel)  form.append('equipment_model', equipmentModel);
+        if (deviceType)      form.append('device_type', deviceType);
+        if (imageFile)       form.append('image', imageFile);
+
+        try {
+            const res = await fetch(`${API}/tickets`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` },
+                body: form,
+            });
+            const data = await res.json();
+            if (!res.ok) {
+                showToast(data.detail || 'Submission failed.', 'error');
+                btn.innerHTML = '<i class="fa-solid fa-paper-plane mr-2"></i> Submit Incident Report';
+                btn.disabled = false;
+                return;
+            }
+
+            // Save receipt data for PDF download
+            lastReceipt = {
+                id: data.id,
+                ticket_number: data.ticket_number,
+                title, description, priority, location, terminal,
+                equipment_model: equipmentModel,
+                device_type: deviceType,
+                category: data.category,
+                status: data.status,
+                created_at: data.created_at,
+                reporter: (JSON.parse(localStorage.getItem('ims_user')||'{}').full_name) || 'Unknown',
+            };
+
+            document.getElementById('success-ref-id').textContent = `Ticket No: #${data.ticket_number || data.id}`;
+            document.getElementById('success-modal').classList.remove('hidden');
+            showToast('Incident reported successfully!', 'success');
+
+            // Reset form
+            setTimeout(() => {
+                document.getElementById('title').value           = '';
+                document.getElementById('description').value     = '';
+                document.getElementById('location').value        = '';
+                document.getElementById('terminal').value        = '';
+                document.getElementById('equipment-model').value = '';
+                document.getElementById('device-type').value     = '';
+                onDeviceChange();
+                titleWasAutofilled = false;
+                setPriority('medium');
+
+    // ── Description character counter ─────────────────────
+    function updateDescCount() {
+        const len = document.getElementById('description').value.trim().length;
+        const el  = document.getElementById('desc-count');
+        if (len === 0)      { el.textContent = '0 characters · minimum 10'; el.className = 'text-[10px] text-slate-400 mt-1 text-right'; }
+        else if (len < 10)  { el.textContent = `${len} characters · ${10 - len} more needed`; el.className = 'text-[10px] text-amber-500 mt-1 text-right font-semibold'; }
+        else                { el.textContent = `${len} characters ✓`; el.className = 'text-[10px] text-emerald-500 mt-1 text-right font-semibold'; }
+    }
+                clearFile();
+                clearScan();
+                btn.innerHTML = '<i class="fa-solid fa-paper-plane mr-2"></i> Submit Incident Report';
+                btn.disabled  = false;
+            }, 1500);
+
+        } catch (e) {
+            showToast('Cannot reach server.', 'error');
+            btn.innerHTML = '<i class="fa-solid fa-paper-plane mr-2"></i> Submit Incident Report';
+            btn.disabled  = false;
+        }
+    }
+
+    // ── Receipt PDF download ─────────────────────────────
+    function closeSuccessModal() {
+        document.getElementById('success-modal').classList.add('hidden');
+        lastReceipt = null;
+    }
+
+    function downloadReceipt() {
+        if (!lastReceipt || !window.jspdf) {
+            showToast('Receipt data not available.', 'error');
+            return;
+        }
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+        const r = lastReceipt;
+
+        // Header
+        doc.setFillColor(10, 25, 47);
+        doc.rect(0, 0, 210, 28, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(16);
+        doc.setFont(undefined, 'bold');
+        doc.text('Adani Group — Incident Report Receipt', 14, 17);
+
+        // Body
+        doc.setTextColor(20, 20, 20);
+        doc.setFontSize(11);
+        doc.setFont(undefined, 'normal');
+
+        let y = 40;
+        const line = (label, value) => {
+            doc.setFont(undefined, 'bold');
+            doc.text(`${label}:`, 14, y);
+            doc.setFont(undefined, 'normal');
+            const wrapped = doc.splitTextToSize(String(value || '—'), 130);
+            doc.text(wrapped, 60, y);
+            y += 8 * Math.max(1, wrapped.length);
+        };
+
+        line('Ticket No', r.ticket_number ? `#${r.ticket_number}` : r.id);
+        line('Title', r.title);
+        line('Priority', r.priority.toUpperCase());
+        line('Status', (r.status || 'open').toUpperCase());
+        line('Department', r.category ? r.category.replace(/_/g,' ').toUpperCase() : 'Pending review');
+        line('Terminal', r.terminal || 'Not specified');
+        line('Location', r.location || 'Not specified');
+        line('Device', r.device_type || 'Not specified');
+        line('Equipment Model', r.equipment_model || 'Not specified');
+        line('Reported by', r.reporter);
+        line('Submitted at', new Date(r.created_at || Date.now()).toLocaleString());
+
+        y += 4;
+        doc.setFont(undefined, 'bold');
+        doc.text('Description:', 14, y);
+        y += 7;
+        doc.setFont(undefined, 'normal');
+        const descLines = doc.splitTextToSize(r.description, 180);
+        doc.text(descLines, 14, y);
+
+        // Footer
+        doc.setFontSize(9);
+        doc.setTextColor(150, 150, 150);
+        doc.text('This is an automated receipt generated by the Adani IMS. Keep for your records.', 14, 285);
+
+        doc.save(`IMS_Receipt_${r.ticket_number || r.id.substring(0,8)}.pdf`);
+    }
+
+    // ── Toast ─────────────────────────────────────────────
+    function showToast(msg, type) {
+        const t    = document.getElementById('toast');
+        const icon = document.getElementById('toast-icon');
+        t.className = 'fixed top-20 right-6 z-[200] px-5 py-3.5 rounded-2xl shadow-xl text-sm font-semibold flex items-center gap-2.5 transition-all';
+        if (type === 'success') { t.classList.add('bg-emerald-500','text-white'); icon.className='fa-solid fa-circle-check'; }
+        else                    { t.classList.add('bg-red-500','text-white');     icon.className='fa-solid fa-circle-xmark'; }
+        document.getElementById('toast-msg').textContent = msg;
+        t.style.opacity='1'; t.style.pointerEvents='auto';
+        setTimeout(() => { t.style.opacity='0'; t.style.pointerEvents='none'; }, 3500);
+    }
+</script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        lucide.createIcons();
+        initDeviceDropdown();
+    </script>
+<script>
+    // ── Nav: show current user name + wire sign-out ─────────
+    (function () {
+        const el = document.getElementById('nav-user');
+        if (!el) return;
+        try {
+            const u = JSON.parse(localStorage.getItem('ims_user') || '{}');
+            if (u.full_name) el.textContent = u.full_name;
+        } catch (e) { /* ignore */ }
+    })();
+</script>
+</body>
+</html>

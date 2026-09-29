@@ -1,0 +1,1579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+    // ── Per-tab session isolation ─────────────────────────────
+    // sessionStorage is scoped to a single tab, so different tabs can be
+    // signed in as different users at the same time — useful for demos.
+    // We shim just the two IMS auth keys; everything else on localStorage
+    // still works normally.
+    (function () {
+        const KEYS = new Set(['ims_token', 'ims_user']);
+        const _get = localStorage.getItem.bind(localStorage);
+        const _set = localStorage.setItem.bind(localStorage);
+        const _del = localStorage.removeItem.bind(localStorage);
+        localStorage.getItem    = k => KEYS.has(k) ? sessionStorage.getItem(k)      : _get(k);
+        localStorage.setItem    = (k, v) => KEYS.has(k) ? sessionStorage.setItem(k, v) : _set(k, v);
+        localStorage.removeItem = k => KEYS.has(k) ? sessionStorage.removeItem(k)   : _del(k);
+    })();
+</script>
+
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMS | My Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { heading:['Outfit','sans-serif'], body:['Inter','sans-serif'] },
+    colors: {
+      navy:  { 900:'#0A192F', 800:'#112240', 700:'#1C3454' },
+      brand: { blue:'#007AC3', purple:'#6A2A88', magenta:'#B8205C' },
+      ink:   { DEFAULT:'#0F172A', soft:'#334155', muted:'#64748B', faint:'#94A3B8' }
+    },
+    backgroundImage: { 'adani-gradient':'linear-gradient(to right,#007AC3,#6A2A88,#B8205C)' },
+    boxShadow: {
+      'soft-xs':'0 1px 2px rgba(10,25,47,.04)',
+      'soft':'0 1px 3px rgba(10,25,47,.05), 0 4px 12px -2px rgba(10,25,47,.05)',
+      'soft-md':'0 4px 6px -1px rgba(10,25,47,.05), 0 10px 24px -4px rgba(10,25,47,.06)',
+      'soft-lg':'0 8px 16px -4px rgba(10,25,47,.06), 0 24px 48px -8px rgba(10,25,47,.08)'
+    }
+  }}
+}
+</script>
+    <style>
+        @keyframes breach-pulse {
+            0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(239,68,68,.4)}
+            50%{opacity:.85;box-shadow:0 0 0 6px rgba(239,68,68,0)}
+        }
+        @keyframes slide-up {
+            from{opacity:0;transform:translateY(16px)}
+            to{opacity:1;transform:translateY(0)}
+        }
+        .ticket-card{transition:all .2s;border:2px solid transparent;animation:slide-up .3s ease forwards;}
+        .risk-breached{animation:breach-pulse 1.5s ease-in-out infinite;border-color:#ef4444!important;}
+        .risk-danger{border-color:#f97316!important;}
+        .risk-warning{border-color:#f59e0b!important;}
+        .points-fill{transition:width 1.2s cubic-bezier(.34,1.56,.64,1);}
+        #toast{transition:all .3s;}
+        .history-line::before{content:'';position:absolute;left:11px;top:24px;bottom:-12px;width:2px;background:#e2e8f0;}
+        .history-line:last-child::before{display:none;}
+        .tab-btn.active{background:#0A192F;color:white;}
+        .tab-btn{transition:all .15s;}
+    </style>
+<style data-ui-upgrade>
+  body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+         text-rendering:optimizeLegibility; letter-spacing:-0.006em; }
+  h1,h2,h3,h4 { letter-spacing:-0.02em; }
+  h1 { line-height:1.15; } h2,h3 { line-height:1.25; } p { line-height:1.6; }
+
+  /* Soften default text from black to slate on LIGHT pages only */
+  body[class*="F8FAFC"] { color:#334155; }
+
+  /* Tabular figures so live counters/timers don't shift width */
+  .nums, [id^="stat-"], [id^="s-"], [id^="wd-countdown-"], [id^="countdown-"] {
+    font-variant-numeric: tabular-nums; font-feature-settings:"tnum";
+  }
+
+  /* One calm transition, scoped to interactive elements */
+  a, button, input, select, textarea, [role="button"] {
+    transition: color .2s ease, background-color .2s ease, border-color .2s ease,
+                box-shadow .2s ease, transform .2s ease;
+  }
+
+  /* Keyboard-only focus ring (brand-tinted); none on mouse click */
+  :focus { outline:none; }
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+    box-shadow: 0 0 0 3px rgba(0,122,195,.30); border-radius:10px;
+  }
+
+  /* Gentle press feedback */
+  button:active, [role="button"]:active { transform: translateY(1px); }
+
+  /* Respect reduced-motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { transition-duration:.01ms!important; animation-duration:.01ms!important; scroll-behavior:auto!important; }
+  }
+</style>
+<style data-qol-polish>
+  /* Slim, calm scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; border: 2px solid transparent; background-clip: content-box; }
+
+  /* Content gently fades in on load */
+  @keyframes qol-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  main { animation: qol-fade-up .35s ease-out; }
+
+  /* Cards lift slightly on hover (scoped to existing rounded cards) */
+  .shadow-soft { transition: box-shadow .2s ease, transform .2s ease; }
+  .shadow-soft:hover { box-shadow: 0 6px 14px -2px rgba(10,25,47,.08), 0 16px 32px -8px rgba(10,25,47,.09); }
+
+  /* Table rows get a subtle left accent on hover */
+  tbody tr { transition: background-color .15s ease, box-shadow .15s ease; }
+  tbody tr:hover { box-shadow: inset 3px 0 0 #007AC3; }
+
+  @media (prefers-reduced-motion: reduce) { main { animation: none; } }
+</style>
+<script>
+    // ── Auth guard (runs before any other script on this page) ─────
+    (function () {
+        const token = localStorage.getItem('ims_token');
+        const userStr = localStorage.getItem('ims_user');
+
+        if (!token || !userStr) {
+            window.location.replace('login.html');
+            return;
+        }
+
+        // JWT expiry check — decode the payload without needing a library
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if (payload.exp && payload.exp * 1000 < Date.now()) {
+                localStorage.removeItem('ims_token');
+                localStorage.removeItem('ims_user');
+                window.location.replace('login.html?expired=1');
+                return;
+            }
+        } catch (e) {
+            // Malformed token → force re-login
+            localStorage.removeItem('ims_token');
+            localStorage.removeItem('ims_user');
+            window.location.replace('login.html');
+            return;
+        }
+
+        // Role gate — set inside each page's script tag via <body>
+        const user = JSON.parse(userStr);
+        const requires = document.body.getAttribute('data-requires-role');
+        if (requires) {
+            const allowed = requires.split(',').map(s => s.trim());
+            if (!allowed.includes(user.role)) {
+                window.location.replace('dashboard.html?denied=1');
+                return;
+            }
+        }
+    })();
+</script>
+</head>
+<body class="font-body bg-[#F8FAFC] antialiased">
+
+    <!-- Nav -->
+    <nav class="fixed w-full z-50 bg-white/90 backdrop-blur-lg border-b border-slate-200/50 shadow-soft">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
+            <a href="basic.html" class="flex items-center gap-2.5">
+                <div class="w-7 h-7 rounded-md bg-adani-gradient flex items-center justify-center shadow-soft">
+                    <i class="fa-solid fa-shield-halved text-white text-xs"></i>
+                </div>
+                <span class="font-heading font-bold text-xl text-navy-900">IMS</span>
+            </a>
+            <div class="flex items-center gap-1">
+                <a href="dashboard.html"  class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Dashboard</a>
+                <a href="tickets.html"    class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Incidents</a>
+                <a href="manager.html"    class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Manager</a>
+                <a href="sla.html"        class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">SLA</a>
+                <a href="worker.html"     class="px-4 py-2 rounded-full text-sm font-bold text-brand-blue">My Work</a>
+                <a href="analytics.html"  class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Analytics</a>
+                <button onclick="window.location.href='report.html'" class="ml-2 px-5 py-2 rounded-full text-white text-sm font-semibold bg-navy-900 hover:bg-navy-800 transition shadow-md shadow-navy-900/20 hover:-translate-y-0.5">
+                    <i class="fa-solid fa-plus mr-1.5 text-xs"></i>Report
+                </button>
+                <div class="ml-3 flex items-center gap-2 pl-3 border-l border-slate-200">
+                    <span id="nav-user" class="hidden sm:inline text-xs text-slate-500 font-medium max-w-[110px] truncate"></span>
+                    <button onclick="if (confirm('Sign out?')) { localStorage.removeItem('ims_token'); localStorage.removeItem('ims_user'); window.location.href='login.html'; }"
+                            class="w-8 h-8 rounded-full text-slate-500 hover:text-red-600 hover:bg-red-50 transition flex items-center justify-center" title="Sign out">
+                        <i class="fa-solid fa-right-from-bracket text-xs"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Toast -->
+    <div id="toast" class="fixed top-20 right-6 z-[100] px-5 py-3.5 rounded-2xl shadow-xl text-sm font-semibold flex items-center gap-2.5 opacity-0 pointer-events-none">
+        <i id="toast-icon" class="text-base"></i><span id="toast-msg"></span>
+    </div>
+
+    <main class="pt-28 pb-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <!-- Loading -->
+        <div id="loading-state" class="text-center py-20 text-slate-400">
+            <i class="fa-solid fa-circle-notch fa-spin text-3xl mb-4 block text-brand-blue/40"></i>
+            <p class="text-sm">Loading your dashboard...</p>
+        </div>
+
+        <!-- Access denied -->
+        <div id="error-state" class="hidden text-center py-20">
+            <i class="fa-solid fa-triangle-exclamation text-4xl mb-4 block text-amber-400"></i>
+            <p class="font-heading font-bold text-navy-900 text-lg mb-1">Access denied</p>
+            <p class="text-slate-400 text-sm mb-6">This page requires a Worker, Manager, or Admin account.</p>
+            <a href="login.html" class="px-5 py-2.5 bg-navy-900 text-white rounded-xl text-sm font-semibold hover:bg-navy-800 transition">Go to Login</a>
+        </div>
+
+        <!-- Main content -->
+        <div id="main-content" class="hidden">
+
+            <!-- Header -->
+            <div class="mb-8 flex justify-between items-end">
+                <div>
+                    <p class="text-xs font-semibold text-brand-blue uppercase tracking-widest mb-1">Worker Console</p>
+                    <h1 id="page-title" class="font-heading text-3xl font-extrabold text-navy-900">My Dashboard</h1>
+                    <p id="page-sub" class="text-slate-400 text-sm mt-1"></p>
+                </div>
+                <button onclick="loadWorkerData()" class="text-sm bg-white border border-slate-200 px-4 py-2 rounded-xl text-slate-600 hover:text-brand-blue hover:border-brand-blue transition shadow-soft flex items-center gap-2">
+                    <i class="fa-solid fa-rotate-right"></i> Refresh
+                </button>
+            </div>
+
+            <!-- Profile card -->
+            <div class="bg-white rounded-3xl shadow-soft border border-slate-200/50 p-6 mb-6">
+                <div class="flex items-start gap-5 flex-wrap">
+                    <!-- Avatar -->
+                    <div class="w-16 h-16 rounded-2xl bg-adani-gradient flex items-center justify-center shadow-md flex-shrink-0">
+                        <span id="avatar-letter" class="text-white text-2xl font-bold font-heading"></span>
+                    </div>
+
+                    <!-- Info -->
+                    <div class="flex-1 min-w-[200px]">
+                        <div class="flex items-center gap-3 flex-wrap mb-0.5">
+                            <h2 id="worker-name" class="font-heading text-xl font-extrabold text-navy-900"></h2>
+                            <span id="dept-badge" class="hidden px-3 py-1 rounded-full text-xs font-bold bg-blue-50 text-brand-blue border border-blue-200 uppercase tracking-wider"></span>
+                            <span id="role-badge" class="px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider"></span>
+                            <span id="blacklist-badge" class="hidden px-3 py-1 rounded-full text-xs font-bold bg-red-100 text-red-600 border border-red-200 uppercase">🚫 Blacklisted</span>
+                        </div>
+                        <p id="worker-email" class="text-slate-400 text-sm mb-4"></p>
+
+                        <!-- Points bar -->
+                        <div>
+                            <div class="flex justify-between items-center mb-1.5">
+                                <p class="text-xs font-semibold text-slate-500">Penalty Points (threshold: 30)</p>
+                                <p id="points-label" class="text-xs font-bold"></p>
+                            </div>
+                            <div class="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                                <div id="points-bar" class="points-fill h-2.5 rounded-full" style="width:0%"></div>
+                            </div>
+                            <p id="points-warning" class="hidden text-xs mt-1.5 font-semibold"></p>
+                        </div>
+                    </div>
+
+                    <!-- Stat tiles -->
+                    <div class="flex gap-3 flex-shrink-0 flex-wrap">
+                        <div class="text-center bg-slate-50 rounded-2xl px-5 py-4 border border-slate-200/60 min-w-[80px]">
+                            <p id="s-active" class="font-heading text-2xl font-extrabold text-navy-900">--</p>
+                            <p class="text-xs text-slate-400 mt-0.5">Active</p>
+                        </div>
+                        <div class="text-center bg-slate-50 rounded-2xl px-5 py-4 border border-slate-200/60 min-w-[80px]">
+                            <p id="s-breaches" class="font-heading text-2xl font-extrabold text-amber-500">--</p>
+                            <p class="text-xs text-slate-400 mt-0.5">Breaches</p>
+                        </div>
+                        <div class="text-center bg-slate-50 rounded-2xl px-5 py-4 border border-slate-200/60 min-w-[80px]">
+                            <p id="s-points" class="font-heading text-2xl font-extrabold text-red-500">--</p>
+                            <p class="text-xs text-slate-400 mt-0.5">Points</p>
+                        </div>
+                        <div class="text-center bg-slate-50 rounded-2xl px-5 py-4 border border-slate-200/60 min-w-[80px]">
+                            <p id="s-until" class="font-heading text-2xl font-extrabold text-emerald-500">--</p>
+                            <p class="text-xs text-slate-400 mt-0.5">Until BL</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Approvals (managers/admins only — hidden for workers) -->
+            <div id="approvals-section" class="hidden">
+                <!-- Help Requests Pending Approval -->
+                <div class="bg-white rounded-3xl shadow-soft border border-slate-200/50 overflow-hidden mb-6">
+                    <div class="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+                        <div>
+                            <h2 class="font-heading text-base font-bold text-navy-900 flex items-center gap-2">
+                                🙋 Help Requests
+                                <span id="help-requests-count" class="hidden bg-blue-100 text-brand-blue px-2 py-0.5 rounded-full text-[10px] font-bold"></span>
+                            </h2>
+                            <p class="text-xs text-slate-400 mt-0.5">Lead workers requesting a helper on HIGH/CRITICAL tickets</p>
+                        </div>
+                    </div>
+                    <div id="help-requests-list" class="p-4 space-y-3">
+                        <div class="text-center py-8 text-slate-400">
+                            <i class="fa-solid fa-circle-notch fa-spin text-xl mb-2 block text-brand-blue/40"></i>
+                            <p class="text-sm">Loading...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Hold Requests Pending Approval -->
+                <div class="bg-white rounded-3xl shadow-soft border border-slate-200/50 overflow-hidden mb-6">
+                    <div class="px-6 py-5 border-b border-slate-100 flex items-center justify-between">
+                        <div>
+                            <h2 class="font-heading text-base font-bold text-navy-900 flex items-center gap-2">
+                                ⏸️ Hold Requests
+                                <span id="hold-requests-count" class="hidden bg-amber-100 text-amber-600 px-2 py-0.5 rounded-full text-[10px] font-bold"></span>
+                            </h2>
+                            <p class="text-xs text-slate-400 mt-0.5">Workers asking permission to pause a ticket's SLA while they handle a higher-priority incident. The clock keeps running until you approve and they execute the hold.</p>
+                        </div>
+                    </div>
+                    <div id="hold-requests-list" class="p-4 space-y-3">
+                        <div class="text-center py-8 text-slate-400">
+                            <i class="fa-solid fa-circle-notch fa-spin text-xl mb-2 block text-amber-400/40"></i>
+                            <p class="text-sm">Loading...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabs -->
+            <div class="flex gap-1 bg-white border border-slate-200 rounded-2xl p-1 shadow-soft mb-6 w-fit">
+                <button class="tab-btn active text-xs font-semibold px-4 py-2 rounded-xl" onclick="setTab('active', this)">
+                    <i class="fa-solid fa-bolt mr-1.5"></i>Active <span id="active-count" class="ml-1 bg-brand-blue/10 text-brand-blue px-1.5 py-0.5 rounded-full text-[10px] font-bold"></span>
+                </button>
+                <button class="tab-btn text-xs font-semibold px-4 py-2 rounded-xl text-slate-500" onclick="setTab('queued', this)">
+                    <i class="fa-solid fa-pause mr-1.5"></i>On Hold <span id="queued-count" class="ml-1 bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded-full text-[10px] font-bold"></span>
+                </button>
+                <button class="tab-btn text-xs font-semibold px-4 py-2 rounded-xl text-slate-500" onclick="setTab('resolved', this)">
+                    <i class="fa-solid fa-check-double mr-1.5"></i>Resolved
+                </button>
+                <button class="tab-btn text-xs font-semibold px-4 py-2 rounded-xl text-slate-500" onclick="setTab('history', this)">
+                    <i class="fa-solid fa-clock-rotate-left mr-1.5"></i>Breach History <span id="breach-count-badge" class="ml-1 bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full text-[10px] font-bold"></span>
+                </button>
+                <button class="tab-btn text-xs font-semibold px-4 py-2 rounded-xl text-slate-500" onclick="setTab('performance', this)">
+                    <i class="fa-solid fa-chart-line mr-1.5"></i>My Performance
+                </button>
+            </div>
+
+            <!-- Tab panels -->
+            <div id="tab-active">
+                <div id="active-tickets-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+            </div>
+
+            <div id="tab-queued" class="hidden">
+                <div id="queued-tickets-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+            </div>
+
+            <div id="tab-resolved" class="hidden">
+                <div id="resolved-tickets-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+            </div>
+
+            <div id="tab-history" class="hidden">
+                <div id="breach-history-list"></div>
+            </div>
+
+            <!-- Performance tab panel -->
+            <div id="tab-performance" class="hidden">
+                <div id="performance-panel">
+                    <div class="text-center py-16 text-slate-400">
+                        <i class="fa-solid fa-circle-notch fa-spin text-2xl mb-3 block text-brand-blue/40"></i>
+                        <p class="text-sm">Loading performance data...</p>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <!-- Suggestions Modal -->
+    <div id="suggestions-modal" class="fixed inset-0 z-[100] bg-navy-900/70 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+            <div class="px-6 py-5 border-b border-slate-100 flex justify-between items-center flex-shrink-0">
+                <div>
+                    <h3 class="font-heading font-bold text-navy-900 flex items-center gap-2">
+                        <i class="fa-solid fa-lightbulb text-amber-400"></i> Resolution Suggestions
+                    </h3>
+                    <p id="suggestions-subtitle" class="text-xs text-slate-400 mt-0.5 truncate max-w-sm"></p>
+                </div>
+                <button onclick="closeSuggestions()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition flex-shrink-0">
+                    <i class="fa-solid fa-xmark text-slate-600 text-sm"></i>
+                </button>
+            </div>
+            <div id="suggestions-content" class="overflow-y-auto p-6 space-y-6">
+                <div class="text-center py-8">
+                    <i class="fa-solid fa-circle-notch fa-spin text-2xl text-brand-blue/40 block mb-3"></i>
+                    <p class="text-sm text-slate-400">Scanning resolved tickets...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+const API = 'http://localhost:8000';
+const token = localStorage.getItem('ims_token');
+const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+let activeTickets = [];
+let tickerInterval = null;
+let currentTab = 'active';
+
+// ── Category formatter ────────────────────────────────────
+function formatCategory(cat) {
+    if (!cat) return 'Uncategorized';
+    const map = { it:'IT', hr:'HR', security:'Security', technical_operations:'Technical Operations', marketing:'Marketing', legal:'Legal' };
+    return map[cat.toLowerCase()] || cat.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+}
+
+// ── Load data ─────────────────────────────────────────────
+async function loadWorkerData() {
+    try {
+        const res = await fetch(`${API}/worker/me`, { headers });
+        if (!res.ok) {
+            document.getElementById('loading-state').classList.add('hidden');
+            document.getElementById('error-state').classList.remove('hidden');
+            return;
+        }
+        const data = await res.json();
+        activeTickets = data.active_tickets;
+
+        renderProfile(data.profile);
+        renderActiveTickets(data.active_tickets);
+        renderQueuedTickets(data.queued_tickets || []);
+        renderResolvedTickets(data.resolved_tickets);
+        renderBreachHistory(data.breach_history, data.profile);
+
+        document.getElementById('loading-state').classList.add('hidden');
+        document.getElementById('main-content').classList.remove('hidden');
+
+        startTicker();
+    } catch(e) {
+        document.getElementById('loading-state').classList.add('hidden');
+        document.getElementById('error-state').classList.remove('hidden');
+    }
+}
+
+// ── Profile ───────────────────────────────────────────────
+function renderProfile(p) {
+    const user = JSON.parse(localStorage.getItem('ims_user') || '{}');
+
+    document.getElementById('avatar-letter').textContent = p.full_name.charAt(0).toUpperCase();
+    document.getElementById('worker-name').textContent   = p.full_name;
+    document.getElementById('worker-email').textContent  = p.email;
+    document.getElementById('page-title').textContent    = `Welcome, ${p.full_name.split(' ')[0]}`;
+    document.getElementById('page-sub').textContent      = p.department
+        ? `${formatCategory(p.department)} Department`
+        : 'No department assigned';
+
+    document.getElementById('s-active').textContent   = p.active_ticket_count;
+    document.getElementById('s-breaches').textContent  = p.breach_count;
+    document.getElementById('s-points').textContent    = p.penalty_points;
+    document.getElementById('s-until').textContent     = p.is_blacklisted ? '🚫' : p.points_until_blacklist;
+
+    if (p.department) {
+        const deptBadge = document.getElementById('dept-badge');
+        deptBadge.textContent = formatCategory(p.department);
+        deptBadge.classList.remove('hidden');
+    }
+    document.getElementById('role-badge').textContent = user.role || 'WORKER';
+
+    if (p.is_blacklisted) document.getElementById('blacklist-badge').classList.remove('hidden');
+
+    // Points bar
+    const THRESHOLD = 30;
+    const pct = Math.min(100, Math.round((p.penalty_points / THRESHOLD) * 100));
+    const bar = document.getElementById('points-bar');
+    const lbl = document.getElementById('points-label');
+    const wrn = document.getElementById('points-warning');
+    setTimeout(() => { bar.style.width = pct + '%'; }, 100);
+
+    if (p.is_blacklisted) {
+        bar.className = 'points-fill h-2.5 rounded-full bg-red-500';
+        lbl.textContent = `${p.penalty_points} / ${THRESHOLD} — BLACKLISTED`;
+        lbl.className = 'text-xs font-bold text-red-600';
+    } else if (pct >= 67) {
+        bar.className = 'points-fill h-2.5 rounded-full bg-orange-500';
+        lbl.textContent = `${p.penalty_points} / ${THRESHOLD} pts`;
+        lbl.className = 'text-xs font-bold text-orange-600';
+        wrn.textContent = `⚠️ Only ${p.points_until_blacklist} points until blacklist`;
+        wrn.className = 'text-xs mt-1.5 font-semibold text-orange-600';
+        wrn.classList.remove('hidden');
+    } else if (pct >= 33) {
+        bar.className = 'points-fill h-2.5 rounded-full bg-amber-500';
+        lbl.textContent = `${p.penalty_points} / ${THRESHOLD} pts`;
+        lbl.className = 'text-xs font-bold text-amber-600';
+    } else {
+        bar.className = 'points-fill h-2.5 rounded-full bg-emerald-500';
+        lbl.textContent = `${p.penalty_points} / ${THRESHOLD} pts`;
+        lbl.className = 'text-xs font-bold text-emerald-600';
+    }
+}
+
+// ── Active tickets ────────────────────────────────────────
+function renderActiveTickets(tickets) {
+    const grid = document.getElementById('active-tickets-grid');
+    const countBadge = document.getElementById('active-count');
+    countBadge.textContent = tickets.length;
+
+    if (!tickets.length) {
+        grid.innerHTML = `<div class="col-span-full text-center py-16 bg-white rounded-3xl border border-slate-200/60 text-slate-400">
+            <i class="fa-solid fa-circle-check text-4xl mb-3 block text-emerald-400/60"></i>
+            <p class="font-semibold text-navy-900 text-sm">All caught up!</p>
+            <p class="text-xs mt-1">No active tickets assigned to you.</p>
+        </div>`;
+        return;
+    }
+    grid.innerHTML = tickets.map(t => buildActiveCard(t)).join('');
+
+    // Check pending help-request status for every HIGH/CRITICAL lead ticket
+    tickets.forEach(t => {
+        if (!t.is_additional_assignee && (t.priority === 'high' || t.priority === 'critical') && t.status === 'in_progress') {
+            checkPendingHelpRequest(t.id);
+        }
+    });
+}
+
+async function checkPendingHelpRequest(ticketId) {
+    try {
+        const res = await fetch(`${API}/worker/me/tickets/${ticketId}/help-requests`, { headers });
+        if (!res.ok) return;
+        const requests = await res.json();
+        const hasPending = requests.some(r => r.status === 'PENDING');
+        const badge = document.getElementById(`pending-badge-${ticketId}`);
+        if (badge) badge.classList.toggle('hidden', !hasPending);
+    } catch (e) { /* silent — non-critical UI enhancement */ }
+}
+
+function buildActiveCard(t) {
+    const risk = t.risk_level;
+    const RISK = {
+        safe:     {border:'border-transparent', bg:'bg-white',         badge:'bg-emerald-50 text-emerald-700 border-emerald-200', label:'On Track',   dot:'bg-emerald-400'},
+        warning:  {border:'border-amber-300',   bg:'bg-amber-50/30',   badge:'bg-amber-50 text-amber-700 border-amber-200',     label:'Warning',    dot:'bg-amber-400'},
+        danger:   {border:'border-orange-400',  bg:'bg-orange-50/20',  badge:'bg-orange-50 text-orange-700 border-orange-200',  label:'Danger',     dot:'bg-orange-500'},
+        breached: {border:'border-red-500',     bg:'bg-red-50/20',     badge:'bg-red-100 text-red-700 border-red-200',          label:'SLA Breached',dot:'bg-red-500'},
+    }[risk] || {border:'border-transparent', bg:'bg-white', badge:'bg-slate-100 text-slate-600 border-slate-200', label:risk, dot:'bg-slate-400'};
+
+    const PRIORITY = {
+        critical:'bg-red-100 text-red-700 border-red-200',
+        high:'bg-orange-100 text-orange-700 border-orange-200',
+        medium:'bg-amber-100 text-amber-700 border-amber-200',
+        low:'bg-slate-100 text-slate-600 border-slate-200',
+    }[t.priority] || 'bg-slate-100 text-slate-600 border-slate-200';
+
+    const statusLabel = (t.status||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+    const remaining   = t.time_remaining_seconds ?? 0;
+
+    // Action button
+    let actionBtn = '';
+    if (t.next_allowed_status === 'resolved') {
+        actionBtn = `<button onclick="updateStatus('${t.id}','resolved')"
+            class="flex-1 py-2 rounded-xl text-xs font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition flex items-center justify-center gap-1.5">
+            <i class="fa-solid fa-check"></i> Mark Resolved
+        </button>`;
+    } else if (t.next_allowed_status === 'closed') {
+        actionBtn = `<button onclick="updateStatus('${t.id}','closed')"
+            class="flex-1 py-2 rounded-xl text-xs font-bold bg-slate-600 text-white hover:bg-slate-700 transition flex items-center justify-center gap-1.5">
+            <i class="fa-solid fa-lock"></i> Mark Closed
+        </button>`;
+    }
+
+    // Request Help button — only for the LEAD on HIGH/CRITICAL tickets
+    let delegateBtn = '';
+    let pendingBadge = '';
+    if (!t.is_additional_assignee && (t.priority === 'high' || t.priority === 'critical') && t.status === 'in_progress') {
+        delegateBtn = `<button onclick="openDelegateModal('${t.id}', '${t.title.replace(/'/g,"\\'")}')"
+            class="flex-1 py-2 rounded-xl text-xs font-bold bg-brand-blue/10 text-brand-blue border border-blue-200 hover:bg-brand-blue hover:text-white transition flex items-center justify-center gap-1.5">
+            <i class="fa-solid fa-hand"></i> Request Help
+        </button>`;
+        pendingBadge = `<span id="pending-badge-${t.id}" class="hidden text-[10px] font-bold px-2 py-1 bg-amber-50 text-amber-600 border border-amber-200 rounded-lg flex-shrink-0">⏳ Awaiting approval</span>`;
+    }
+
+    // ── Hold controls (approval-gated pause) ──────────────
+    // hold_status drives the button:
+    //   null + a higher-priority ticket exists → "Request Hold"
+    //   PENDING  → waiting badge (manager/admin hasn't decided)
+    //   APPROVED → live "Hold" button (clicking actually pauses the SLA)
+    let holdBtn = '';
+    if (t.status === 'in_progress' && !t.is_paused) {
+        const higherOnes = higherPriorityTicketsThan(t);
+        if (t.hold_status === 'APPROVED') {
+            holdBtn = `<button onclick="executeHold('${t.id}')"
+                class="flex-1 py-2 rounded-xl text-xs font-bold bg-amber-500 text-white hover:bg-amber-600 transition flex items-center justify-center gap-1.5">
+                <i class="fa-solid fa-pause"></i> Hold (Approved)
+            </button>`;
+        } else if (t.hold_status === 'PENDING') {
+            holdBtn = `<span class="text-[10px] font-bold px-2 py-1 bg-amber-50 text-amber-600 border border-amber-200 rounded-lg flex-shrink-0">
+                ⏸️ Hold pending approval</span>`;
+        } else if (higherOnes.length > 0) {
+            holdBtn = `<button onclick="openHoldModal('${t.id}', '${t.title.replace(/'/g,"\\'")}')"
+                class="flex-1 py-2 rounded-xl text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200 hover:bg-amber-500 hover:text-white hover:border-amber-500 transition flex items-center justify-center gap-1.5">
+                <i class="fa-solid fa-circle-pause"></i> Request Hold
+            </button>`;
+        }
+    }
+
+    return `
+    <div class="ticket-card ${risk === 'breached' ? 'risk-breached' : ''} ${RISK.bg} rounded-2xl p-5 shadow-soft border-2 ${RISK.border}">
+        <div class="flex items-start justify-between gap-3 mb-3">
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${PRIORITY}">${t.priority}</span>
+                    <span class="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${RISK.badge}">
+                        <span class="w-1.5 h-1.5 rounded-full ${RISK.dot}"></span>${RISK.label}
+                    </span>
+                </div>
+                <p class="font-semibold text-navy-900 text-sm leading-snug">${t.title}</p>
+                <p class="text-xs text-slate-400 mt-0.5">${t.ticket_number ? '<span class="font-mono font-bold text-slate-500">#'+t.ticket_number+'</span> · ' : ''}${formatCategory(t.category)}${t.location ? ' · ' + t.location : ''}</p>
+            </div>
+        </div>
+
+        <!-- SLA countdown -->
+        <div class="bg-slate-50 rounded-xl p-3 mb-3 border border-slate-200/60">
+            <div class="flex justify-between items-center mb-1">
+                <p class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                    ${remaining < 0 ? 'Overdue by' : 'SLA Remaining'}
+                </p>
+                <p id="wd-countdown-${t.id}" class="font-heading text-base font-extrabold ${
+                    risk==='breached'?'text-red-600':risk==='danger'?'text-orange-600':risk==='warning'?'text-amber-600':'text-emerald-600'
+                }">${formatTime(remaining)}</p>
+            </div>
+            <div class="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
+                <div class="h-1.5 rounded-full transition-all ${
+                    risk==='breached'?'bg-red-500 w-full':risk==='danger'?'bg-orange-500':risk==='warning'?'bg-amber-500':'bg-emerald-500'
+                }" style="width:${risk==='breached'?100:Math.round(Math.max(0,Math.min(1,(t.time_remaining_seconds||0)/(t.total_sla_seconds||_priorityWindowSeconds(t.priority))))*100)}%"></div>
+            </div>
+        </div>
+
+        <!-- Status + actions -->
+        <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-[10px] font-semibold px-2 py-1 bg-slate-100 text-slate-600 rounded-lg flex-shrink-0">${statusLabel}</span>
+            ${actionBtn}
+            ${delegateBtn}
+            ${holdBtn}
+            ${pendingBadge}
+        </div>
+
+        <!-- Suggestions button — always visible on active tickets -->
+        <button onclick="loadSuggestions('${t.id}', '${t.title.replace(/'/g,"\\'").substring(0,60)}')"
+            class="mt-2 w-full py-1.5 rounded-xl text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition flex items-center justify-center gap-1.5">
+            <i class="fa-solid fa-lightbulb text-amber-400"></i> Get Resolution Suggestions
+        </button>
+
+        <p class="text-[10px] text-slate-400 mt-2">
+            <i class="fa-regular fa-clock mr-1"></i>Deadline: ${t.sla_deadline ? new Date(t.sla_deadline).toLocaleString() : 'Not set'}
+        </p>
+    </div>`;
+}
+
+// ── Queued (paused) tickets ───────────────────────────────
+// These have a frozen SLA clock — preempted by a higher-priority ticket.
+// They are NOT in `activeTickets`, so the ticker never decrements them.
+function renderQueuedTickets(tickets) {
+    const grid  = document.getElementById('queued-tickets-grid');
+    const badge = document.getElementById('queued-count');
+    if (badge) badge.textContent = tickets.length;
+
+    if (!tickets.length) {
+        grid.innerHTML = `<div class="col-span-full text-center py-12 text-slate-400">
+            <i class="fa-solid fa-pause text-2xl mb-2 block text-slate-300"></i>
+            <p class="text-xs mt-1">Nothing on hold. When a higher-priority ticket lands on you, use <strong>Request Hold</strong> on the lower one — after your manager approves, it pauses here with a frozen SLA.</p>
+        </div>`;
+        return;
+    }
+    grid.innerHTML = tickets.map(t => buildQueuedCard(t)).join('');
+}
+
+function buildQueuedCard(t) {
+    const PRIORITY = {
+        critical:'bg-red-100 text-red-700 border-red-200',
+        high:'bg-orange-100 text-orange-700 border-orange-200',
+        medium:'bg-amber-100 text-amber-700 border-amber-200',
+        low:'bg-slate-100 text-slate-600 border-slate-200',
+    }[t.priority] || 'bg-slate-100 text-slate-600 border-slate-200';
+
+    // Frozen remaining time — saved when the ticket was paused.
+    const frozen = t.remaining_sla_seconds ?? t.time_remaining_seconds ?? 0;
+
+    return `
+    <div class="ticket-card bg-slate-50/60 rounded-2xl p-5 shadow-soft border-2 border-dashed border-slate-300">
+        <div class="flex items-start justify-between gap-3 mb-3">
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${PRIORITY}">${t.priority}</span>
+                    <span class="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border bg-slate-100 text-slate-600 border-slate-200">
+                        <i class="fa-solid fa-pause text-[8px]"></i> On Hold
+                    </span>
+                </div>
+                <p class="font-semibold text-navy-900 text-sm leading-snug">${t.title}</p>
+                <p class="text-xs text-slate-400 mt-0.5">${t.ticket_number ? '<span class="font-mono font-bold text-slate-500">#'+t.ticket_number+'</span> · ' : ''}${formatCategory(t.category)}${t.location ? ' · ' + t.location : ''}</p>
+            </div>
+        </div>
+
+        <!-- Frozen SLA -->
+        <div class="bg-white rounded-xl p-3 mb-1 border border-slate-200/60">
+            <div class="flex justify-between items-center">
+                <p class="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">SLA Frozen At</p>
+                <p class="font-heading text-base font-extrabold text-slate-500">${formatTime(frozen)}</p>
+            </div>
+        </div>
+        <p class="text-[10px] text-slate-400 mt-2">
+            <i class="fa-solid fa-hourglass-half mr-1"></i>Resumes automatically when the higher-priority ticket that blocked it is resolved — the clock restarts from exactly this time.
+        </p>
+    </div>`;
+}
+
+// ── Resolved tickets ──────────────────────────────────────
+function renderResolvedTickets(tickets) {
+    const grid = document.getElementById('resolved-tickets-grid');
+    if (!tickets.length) {
+        grid.innerHTML = `<div class="col-span-full text-center py-16 bg-white rounded-3xl border border-slate-200/60 text-slate-400">
+            <i class="fa-solid fa-inbox text-3xl mb-3 block opacity-30"></i>
+            <p class="text-sm">No resolved tickets yet.</p>
+        </div>`;
+        return;
+    }
+    grid.innerHTML = tickets.map(t => {
+        const PRIORITY = {critical:'bg-red-100 text-red-700',high:'bg-orange-100 text-orange-700',medium:'bg-amber-100 text-amber-700',low:'bg-slate-100 text-slate-600'}[t.priority]||'bg-slate-100 text-slate-600';
+        const statusColor = t.status === 'closed' ? 'bg-slate-200 text-slate-700' : 'bg-emerald-100 text-emerald-700';
+        const statusLabel = t.status === 'closed' ? 'Closed' : 'Resolved';
+
+        let closeBtn = '';
+        if (t.next_allowed_status === 'closed') {
+            closeBtn = `<button onclick="updateStatus('${t.id}','closed')"
+                class="text-[10px] font-bold text-slate-500 hover:text-slate-700 border border-slate-200 hover:border-slate-400 px-2.5 py-1 rounded-lg transition ml-auto">
+                Close
+            </button>`;
+        }
+
+        return `<div class="ticket-card bg-white rounded-2xl p-4 shadow-soft border-2">
+            <div class="flex items-center justify-between gap-3">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${PRIORITY}">${t.priority.toUpperCase()}</span>
+                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${statusColor}">${statusLabel}</span>
+                    </div>
+                    <p class="font-semibold text-navy-900 text-sm truncate">${t.title}</p>
+                    <p class="text-xs text-slate-400 mt-0.5">${formatCategory(t.category)}</p>
+                </div>
+                ${closeBtn}
+            </div>
+            <p class="text-[10px] text-slate-400 mt-2.5 border-t border-slate-50 pt-2.5">
+                <i class="fa-solid fa-check-circle text-emerald-500 mr-1"></i>
+                Resolved: ${t.resolved_at ? new Date(t.resolved_at).toLocaleString() : '—'}
+            </p>
+        </div>`;
+    }).join('');
+}
+
+// ── Breach history ────────────────────────────────────────
+function renderBreachHistory(history, profile) {
+    const el = document.getElementById('breach-history-list');
+    const badge = document.getElementById('breach-count-badge');
+    badge.textContent = history.length;
+
+    if (!history.length) {
+        el.innerHTML = `<div class="text-center py-16 bg-white rounded-3xl border border-slate-200/60">
+            <i class="fa-solid fa-shield-check text-4xl mb-3 block text-emerald-400/60"></i>
+            <p class="font-semibold text-navy-900 text-sm">Clean record!</p>
+            <p class="text-xs text-slate-400 mt-1">No SLA breaches on your account.</p>
+        </div>`;
+        return;
+    }
+
+    const PRIORITY_POINTS = {critical:20,high:10,medium:5,low:2};
+    const PRIORITY_COLORS  = {critical:'text-red-600 bg-red-100',high:'text-orange-600 bg-orange-100',medium:'text-amber-600 bg-amber-100',low:'text-slate-600 bg-slate-100'};
+
+    // Summary card
+    const totalPts = history.reduce((s,h) => s + (PRIORITY_POINTS[h.priority]||5), 0);
+    const summaryHtml = `
+    <div class="bg-white rounded-2xl p-5 shadow-soft border border-slate-200/50 mb-6 flex items-center justify-between gap-4">
+        <div>
+            <p class="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-1">Accountability Summary</p>
+            <p class="font-heading text-2xl font-extrabold text-navy-900">${history.length} Breach${history.length!==1?'es':''}</p>
+            <p class="text-sm text-slate-400 mt-0.5">${totalPts} penalty points accumulated from SLA violations</p>
+        </div>
+        <div class="flex gap-3">
+            <div class="text-center bg-red-50 rounded-xl px-4 py-3 border border-red-100">
+                <p class="font-heading text-xl font-extrabold text-red-600">${profile.penalty_points}</p>
+                <p class="text-[10px] text-red-400 font-semibold">Current Pts</p>
+            </div>
+            <div class="text-center bg-slate-50 rounded-xl px-4 py-3 border border-slate-200/60">
+                <p class="font-heading text-xl font-extrabold ${profile.is_blacklisted?'text-red-600':'text-emerald-600'}">${profile.is_blacklisted?'BL':profile.points_until_blacklist}</p>
+                <p class="text-[10px] text-slate-400 font-semibold">${profile.is_blacklisted?'Blacklisted':'Until BL'}</p>
+            </div>
+        </div>
+    </div>`;
+
+    // Timeline
+    const timelineHtml = `
+    <div class="bg-white rounded-2xl shadow-soft border border-slate-200/50 overflow-hidden">
+        <div class="px-6 py-4 border-b border-slate-100">
+            <h3 class="font-heading font-bold text-navy-900 text-sm">Breach Timeline</h3>
+            <p class="text-xs text-slate-400 mt-0.5">Most recent first</p>
+        </div>
+        <div class="p-6 space-y-4">
+            ${history.map((h, i) => {
+                const pts = PRIORITY_POINTS[h.priority] || 5;
+                const clr = PRIORITY_COLORS[h.priority] || 'text-slate-600 bg-slate-100';
+                const date = new Date(h.escalated_at);
+                return `
+                <div class="history-line relative pl-8">
+                    <div class="absolute left-0 top-1 w-6 h-6 rounded-full bg-red-100 border-2 border-red-300 flex items-center justify-center">
+                        <span class="w-2 h-2 rounded-full bg-red-500"></span>
+                    </div>
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="flex-1 min-w-0">
+                            <p class="font-semibold text-navy-900 text-sm truncate">${h.ticket_title}</p>
+                            <div class="flex items-center gap-2 mt-1">
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${clr}">${h.priority.toUpperCase()}</span>
+                                <span class="text-xs text-slate-400">${date.toLocaleDateString()} at ${date.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</span>
+                            </div>
+                        </div>
+                        <div class="flex-shrink-0 text-right">
+                            <p class="text-base font-extrabold font-heading text-red-600">-${pts} pts</p>
+                            <p class="text-[10px] text-slate-400">SLA breach</p>
+                        </div>
+                    </div>
+                </div>`;
+            }).join('')}
+        </div>
+    </div>`;
+
+    el.innerHTML = summaryHtml + timelineHtml;
+}
+
+// ── Tab switching ─────────────────────────────────────────
+function setTab(tab, btn) {
+    currentTab = tab;
+    ['active','queued','resolved','history','performance'].forEach(t => {
+        document.getElementById(`tab-${t}`).classList.add('hidden');
+    });
+    document.getElementById(`tab-${tab}`).classList.remove('hidden');
+    document.querySelectorAll('.tab-btn').forEach(b => {
+        b.classList.remove('active');
+        b.classList.add('text-slate-500');
+    });
+    btn.classList.add('active');
+    btn.classList.remove('text-slate-500');
+
+    if (tab === 'performance') loadPerformance();
+}
+
+// ── Update ticket status ──────────────────────────────────
+async function updateStatus(ticketId, newStatus) {
+    const label = newStatus === 'resolved' ? 'Resolving...' : 'Closing...';
+    showToast(label, 'info');
+    try {
+        const res = await fetch(`${API}/worker/me/tickets/${ticketId}/status`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({ status: newStatus }),
+        });
+        if (res.ok) {
+            const msg = newStatus === 'resolved' ? '✅ Ticket marked as resolved' : '🔒 Ticket closed';
+            showToast(msg, 'success');
+            await loadWorkerData();
+        } else {
+            const err = await res.json();
+            showToast(err.detail || 'Failed to update status', 'error');
+        }
+    } catch(e) {
+        showToast('Network error', 'error');
+    }
+}
+
+// ── Countdown tick ────────────────────────────────────────
+function startTicker() {
+    if (tickerInterval) clearInterval(tickerInterval);
+    tickerInterval = setInterval(() => {
+        activeTickets.forEach(t => {
+            if (t.time_remaining_seconds !== null) t.time_remaining_seconds -= 1;
+            const el = document.getElementById(`wd-countdown-${t.id}`);
+            if (el) el.textContent = formatTime(t.time_remaining_seconds);
+        });
+    }, 1000);
+}
+
+function formatTime(secs) {
+    if (secs === null || secs === undefined) return 'N/A';
+    const abs = Math.abs(secs);
+    const h = Math.floor(abs/3600), m = Math.floor((abs%3600)/60), s = abs%60;
+    const str = [h,m,s].map(n=>String(n).padStart(2,'0')).join(':');
+    return secs < 0 ? `+${str}` : str;
+}
+
+// Fallback SLA window (seconds) per priority — used to draw the progress
+// bar when the API doesn't send total_sla_seconds directly (the worker
+// dashboard endpoint currently doesn't). Values match app/config.py:
+//   LOW = 24h, MEDIUM = 8h, HIGH = 2h, CRITICAL = 30min
+function _priorityWindowSeconds(priority) {
+    switch (priority) {
+        case 'critical': return 30 * 60;
+        case 'high':     return 2 * 3600;
+        case 'medium':   return 8 * 3600;
+        case 'low':      return 24 * 3600;
+        default:         return 8 * 3600;
+    }
+}
+
+// ── Toast ─────────────────────────────────────────────────
+function showToast(msg, type) {
+    const t = document.getElementById('toast');
+    const icon = document.getElementById('toast-icon');
+    const text = document.getElementById('toast-msg');
+    t.className = 'fixed top-20 right-6 z-[100] px-5 py-3.5 rounded-2xl shadow-xl text-sm font-semibold flex items-center gap-2.5 transition-all';
+    if (type === 'success')     { t.classList.add('bg-emerald-500','text-white'); icon.className='fa-solid fa-circle-check'; }
+    else if (type === 'error')  { t.classList.add('bg-red-500','text-white');     icon.className='fa-solid fa-circle-xmark'; }
+    else                        { t.classList.add('bg-navy-900','text-white');    icon.className='fa-solid fa-circle-notch fa-spin'; }
+    text.textContent = msg;
+    t.style.opacity='1'; t.style.pointerEvents='auto';
+    if (type !== 'info') setTimeout(() => { t.style.opacity='0'; t.style.pointerEvents='none'; }, 3000);
+}
+
+// ── Delegate Helper Modal ──────────────────────────────────
+let delegateTicketId = null;
+
+async function openDelegateModal(ticketId, ticketTitle) {
+    delegateTicketId = ticketId;
+    document.getElementById('delegate-ticket-title').textContent = ticketTitle;
+    document.getElementById('delegate-modal').classList.remove('hidden');
+    document.getElementById('delegate-worker-list').innerHTML =
+        '<p class="text-center text-sm text-slate-400 py-8"><i class="fa-solid fa-circle-notch fa-spin mr-2"></i>Loading workers...</p>';
+
+    try {
+        const res = await fetch(`${API}/worker/me/tickets/${ticketId}/delegatable-workers`, { headers });
+        if (!res.ok) {
+            const err = await res.json();
+            document.getElementById('delegate-worker-list').innerHTML =
+                `<p class="text-center text-sm text-red-500 py-8">${err.detail || 'Failed to load workers'}</p>`;
+            return;
+        }
+        const workers = await res.json();
+        renderDelegateWorkers(workers);
+    } catch (e) {
+        document.getElementById('delegate-worker-list').innerHTML =
+            '<p class="text-center text-sm text-red-500 py-8">Network error</p>';
+    }
+}
+
+function renderDelegateWorkers(workers) {
+    const el = document.getElementById('delegate-worker-list');
+    if (!workers.length) {
+        el.innerHTML = '<p class="text-center text-sm text-slate-400 py-8">No other workers available in your department.</p>';
+        return;
+    }
+    el.innerHTML = workers.map(w => `
+        <button onclick="confirmDelegate('${w.id}', '${w.full_name.replace(/'/g,"\\'")}')"
+            class="w-full flex items-center justify-between gap-3 p-3 rounded-2xl border border-slate-200 hover:border-brand-blue hover:bg-blue-50/30 transition text-left">
+            <div class="flex items-center gap-3">
+                <div class="w-9 h-9 rounded-xl bg-navy-900 flex items-center justify-center flex-shrink-0">
+                    <span class="text-white text-xs font-bold">${w.full_name.charAt(0)}</span>
+                </div>
+                <div>
+                    <p class="text-sm font-semibold text-navy-900">${w.full_name}</p>
+                    <p class="text-[10px] ${w.is_busy ? 'text-amber-500' : 'text-emerald-500'} font-semibold">
+                        ${w.is_busy ? '● Currently busy' : '● Available'}
+                    </p>
+                </div>
+            </div>
+            <i class="fa-solid fa-chevron-right text-slate-300 text-xs"></i>
+        </button>`).join('');
+}
+
+async function confirmDelegate(helperId, helperName) {
+    if (!confirm(`Request help from ${helperName}? A manager or admin must approve before they are added to this ticket.`)) return;
+    try {
+        const res = await fetch(`${API}/worker/me/tickets/${delegateTicketId}/request-help`, {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ helper_id: helperId }),
+        });
+        if (res.ok) {
+            showToast(`🙋 Help request sent for ${helperName} — awaiting approval`, 'success');
+            closeDelegateModal();
+            await loadWorkerData();
+        } else {
+            const err = await res.json();
+            showToast(err.detail || 'Help request failed', 'error');
+        }
+    } catch (e) {
+        showToast('Network error', 'error');
+    }
+}
+
+function closeDelegateModal() {
+    document.getElementById('delegate-modal').classList.add('hidden');
+    delegateTicketId = null;
+}
+
+// ═══════════════════════════════════════════════════════════
+// PERFORMANCE ANALYTICS
+// ═══════════════════════════════════════════════════════════
+
+let perfChart = null;
+
+async function loadPerformance() {
+    const panel = document.getElementById('performance-panel');
+    panel.innerHTML = `<div class="text-center py-16 text-slate-400">
+        <i class="fa-solid fa-circle-notch fa-spin text-2xl mb-3 block text-brand-blue/40"></i>
+        <p class="text-sm">Loading performance data...</p>
+    </div>`;
+
+    try {
+        const res = await fetch(`${API}/worker/me/performance`, { headers });
+        if (!res.ok) throw new Error('Failed');
+        const d = await res.json();
+        renderPerformance(d);
+    } catch (e) {
+        panel.innerHTML = `<div class="text-center py-16 text-slate-400 text-sm">
+            <i class="fa-solid fa-triangle-exclamation text-2xl mb-2 block text-red-300"></i>
+            Could not load performance data.
+        </div>`;
+    }
+}
+
+function renderPerformance(d) {
+    const ptsColor = d.current_total_points >= 20 ? '#dc2626' : d.current_total_points >= 10 ? '#f59e0b' : '#10b981';
+    const ptsUntil = d.points_until_blacklist;
+    const pct = Math.min(100, Math.round((d.current_total_points / 30) * 100));
+
+    const PRIORITY_COLORS = { critical: '#dc2626', high: '#ea580c', medium: '#f59e0b', low: '#64748b' };
+
+    const formatPeriod = (p) => `
+        <div class="text-center p-4 bg-slate-50 rounded-2xl border border-slate-200">
+            <p class="text-2xl font-extrabold text-navy-900">${p.points_lost}</p>
+            <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mt-0.5">pts lost</p>
+            <p class="text-xs text-slate-500 mt-1">${p.count} breach${p.count !== 1 ? 'es' : ''}</p>
+        </div>`;
+
+    const priorityBreakdown = (p) => Object.entries(p.by_priority || {}).map(([pv, cnt]) =>
+        `<span class="text-[10px] px-2 py-0.5 rounded-full font-bold" style="background:${PRIORITY_COLORS[pv]}22;color:${PRIORITY_COLORS[pv]}">${pv.toUpperCase()}: ${cnt}</span>`
+    ).join(' ') || '<span class="text-[10px] text-emerald-500 font-semibold">No breaches</span>';
+
+    const recentRows = d.recent_breaches.length ? d.recent_breaches.map(b => `
+        <div class="flex items-center justify-between gap-3 py-2.5 border-b border-slate-100 last:border-0">
+            <div class="flex-1 min-w-0">
+                <p class="text-xs font-semibold text-navy-900 truncate">${b.ticket_title}</p>
+                <p class="text-[10px] text-slate-400">${new Date(b.escalated_at).toLocaleString()}</p>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+                <span class="text-[10px] px-2 py-0.5 rounded-full font-bold" style="background:${PRIORITY_COLORS[b.priority]}22;color:${PRIORITY_COLORS[b.priority]}">${b.priority.toUpperCase()}</span>
+                <span class="text-xs font-bold text-red-600">−${b.points_deducted}pts</span>
+            </div>
+        </div>`).join('') : '<p class="text-sm text-emerald-500 text-center py-4 font-semibold">No breaches yet — keep it up! 🎉</p>';
+
+    document.getElementById('performance-panel').innerHTML = `
+        <!-- Points gauge -->
+        <div class="bg-white rounded-3xl border border-slate-200 p-6 mb-5">
+            <div class="flex items-start justify-between mb-4">
+                <div>
+                    <p class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Total Penalty Points</p>
+                    <p class="text-4xl font-extrabold" style="color:${ptsColor}">${d.current_total_points}</p>
+                    <p class="text-xs text-slate-400 mt-1">out of 30 before blacklist</p>
+                </div>
+                ${d.is_blacklisted
+                    ? `<span class="px-3 py-1.5 rounded-xl text-xs font-bold bg-red-100 text-red-600 border border-red-200">⛔ Blacklisted</span>`
+                    : `<span class="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-50 text-emerald-600 border border-emerald-200">${ptsUntil}pts until blacklist</span>`
+                }
+            </div>
+            <div class="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                <div class="h-full rounded-full transition-all" style="width:${pct}%;background:${ptsColor}"></div>
+            </div>
+        </div>
+
+        <!-- Period breakdown -->
+        <div class="grid grid-cols-3 gap-3 mb-5">
+            <div>
+                <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 text-center">Today</p>
+                ${formatPeriod(d.today)}
+                <div class="text-center mt-2">${priorityBreakdown(d.today)}</div>
+            </div>
+            <div>
+                <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 text-center">This Week</p>
+                ${formatPeriod(d.this_week)}
+                <div class="text-center mt-2">${priorityBreakdown(d.this_week)}</div>
+            </div>
+            <div>
+                <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2 text-center">This Month</p>
+                ${formatPeriod(d.this_month)}
+                <div class="text-center mt-2">${priorityBreakdown(d.this_month)}</div>
+            </div>
+        </div>
+
+        <!-- Breach chart -->
+        <div class="bg-white rounded-3xl border border-slate-200 p-5 mb-5">
+            <p class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Points Lost — Period Comparison</p>
+            <canvas id="perf-chart" height="120"></canvas>
+        </div>
+
+        <!-- Recent breach log -->
+        <div class="bg-white rounded-3xl border border-slate-200 p-5">
+            <p class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Recent Breach History</p>
+            ${recentRows}
+        </div>`;
+
+    // Draw chart
+    if (perfChart) { perfChart.destroy(); perfChart = null; }
+    const ctx = document.getElementById('perf-chart');
+    if (ctx) {
+        perfChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['Today', 'This Week', 'This Month'],
+                datasets: [
+                    {
+                        label: 'Points Lost',
+                        data: [d.today.points_lost, d.this_week.points_lost, d.this_month.points_lost],
+                        backgroundColor: ['#FEF2F2','#FEF2F2','#FEF2F2'],
+                        borderColor: ['#dc2626','#dc2626','#dc2626'],
+                        borderWidth: 2, borderRadius: 8,
+                    },
+                    {
+                        label: 'Breaches',
+                        data: [d.today.count, d.this_week.count, d.this_month.count],
+                        backgroundColor: ['#FFF7ED','#FFF7ED','#FFF7ED'],
+                        borderColor: ['#f59e0b','#f59e0b','#f59e0b'],
+                        borderWidth: 2, borderRadius: 8,
+                    },
+                ],
+            },
+            options: {
+                responsive: true, maintainAspectRatio: true,
+                plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 12, padding: 12 } } },
+                scales: {
+                    y: { beginAtZero: true, ticks: { font: { size: 10 } }, grid: { color: '#f1f5f9' } },
+                    x: { ticks: { font: { size: 11, weight: '600' } }, grid: { display: false } },
+                },
+            },
+        });
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// RESOLUTION SUGGESTIONS
+// ═══════════════════════════════════════════════════════════
+
+async function loadSuggestions(ticketId, ticketTitle) {
+    document.getElementById('suggestions-subtitle').textContent = ticketTitle;
+    document.getElementById('suggestions-content').innerHTML = `
+        <div class="text-center py-8">
+            <i class="fa-solid fa-circle-notch fa-spin text-2xl text-brand-blue/40 block mb-3"></i>
+            <p class="text-sm text-slate-400">Scanning resolved tickets for similar cases...</p>
+        </div>`;
+    document.getElementById('suggestions-modal').classList.remove('hidden');
+
+    try {
+        const res = await fetch(`${API}/worker/me/tickets/${ticketId}/suggestions`, { headers });
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+        renderSuggestions(data);
+    } catch (e) {
+        document.getElementById('suggestions-content').innerHTML =
+            `<div class="text-center py-8 text-red-500 text-sm">Could not load suggestions. Try again.</div>`;
+    }
+}
+
+function renderSuggestions(data) {
+    const PRIORITY_COLORS = { critical: '#dc2626', high: '#ea580c', medium: '#f59e0b', low: '#64748b' };
+
+    let html = '';
+
+    // Similar resolved tickets
+    if (data.similar_resolved.length > 0) {
+        html += `
+        <div>
+            <p class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
+                <i class="fa-solid fa-magnifying-glass mr-1.5 text-brand-blue/60"></i>
+                Similar Past Incidents (ML Similarity Search)
+            </p>
+            <div class="space-y-3">
+                ${data.similar_resolved.map(s => `
+                    <div class="p-4 rounded-2xl bg-blue-50/40 border border-blue-100">
+                        <div class="flex items-center gap-2 mb-2 flex-wrap">
+                            <span class="text-[10px] px-2 py-0.5 rounded-full font-bold"
+                                style="background:${PRIORITY_COLORS[s.priority] || '#64748b'}22;color:${PRIORITY_COLORS[s.priority] || '#64748b'}">
+                                ${(s.priority || 'medium').toUpperCase()}
+                            </span>
+                            <span class="text-[10px] font-semibold text-brand-blue bg-blue-100 px-2 py-0.5 rounded-full">
+                                ${Math.round(s.similarity_score * 100)}% similar
+                            </span>
+                            ${s.resolved_at ? `<span class="text-[10px] text-slate-400">${new Date(s.resolved_at).toLocaleDateString()}</span>` : ''}
+                        </div>
+                        <p class="text-sm font-semibold text-navy-900 mb-1">${s.title}</p>
+                        <p class="text-xs text-slate-500 leading-relaxed">${s.description}</p>
+                    </div>`).join('')}
+            </div>
+        </div>`;
+    } else {
+        html += `
+        <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-center">
+            <i class="fa-solid fa-database text-slate-300 text-xl mb-2 block"></i>
+            <p class="text-xs text-slate-400 font-semibold">No similar resolved tickets yet</p>
+            <p class="text-[10px] text-slate-400 mt-1">${data.ml_note}</p>
+        </div>`;
+    }
+
+    // Category templates
+    if (data.templates.length > 0) {
+        html += `
+        <div>
+            <p class="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
+                <i class="fa-solid fa-list-check mr-1.5 text-emerald-500/60"></i>
+                Resolution Procedures — ${data.category ? data.category.replace(/_/g,' ').toUpperCase() : 'GENERAL'}
+            </p>
+            <div class="space-y-4">
+                ${data.templates.map(tmpl => `
+                    <div class="p-4 rounded-2xl bg-emerald-50/40 border border-emerald-100">
+                        <p class="text-sm font-bold text-navy-900 mb-3">
+                            <i class="fa-solid fa-screwdriver-wrench text-emerald-500 mr-2"></i>${tmpl.title}
+                        </p>
+                        <ol class="space-y-2">
+                            ${tmpl.steps.map((step, i) => `
+                                <li class="flex gap-3 text-xs text-slate-600">
+                                    <span class="flex-shrink-0 w-5 h-5 rounded-full bg-emerald-100 text-emerald-700 font-bold text-[10px] flex items-center justify-center mt-0.5">${i+1}</span>
+                                    <span class="leading-relaxed">${step}</span>
+                                </li>`).join('')}
+                        </ol>
+                    </div>`).join('')}
+            </div>
+        </div>`;
+    }
+
+    document.getElementById('suggestions-content').innerHTML = html;
+}
+
+function closeSuggestions() {
+    document.getElementById('suggestions-modal').classList.add('hidden');
+}
+
+loadWorkerData();
+
+// ═══════════════════════════════════════════════════════════
+//  HOLD WORKFLOW (approval-gated pause)
+//  Request Hold → manager approves → Hold button → SLA freezes
+// ═══════════════════════════════════════════════════════════
+const PRIORITY_RANK = { low: 1, medium: 2, high: 3, critical: 4 };
+let holdTicketId = null;
+
+// Other ACTIVE tickets of this worker with STRICTLY higher priority —
+// these are the valid "blocking tickets" for a hold request.
+function higherPriorityTicketsThan(t) {
+    return (activeTickets || []).filter(o =>
+        o.id !== t.id &&
+        o.status === 'in_progress' && !o.is_paused &&
+        (PRIORITY_RANK[o.priority] || 0) > (PRIORITY_RANK[t.priority] || 0)
+    );
+}
+
+function openHoldModal(ticketId, title) {
+    holdTicketId = ticketId;
+    document.getElementById('hold-ticket-title').textContent = title;
+    document.getElementById('hold-remark').value = '';
+
+    const t = (activeTickets || []).find(x => x.id === ticketId);
+    const options = t ? higherPriorityTicketsThan(t) : [];
+    const sel = document.getElementById('hold-blocking-select');
+    sel.innerHTML = options.map(o =>
+        `<option value="${o.id}">${o.priority.toUpperCase()} — ${o.ticket_number ? '#' + o.ticket_number + ' · ' : ''}${o.title}</option>`
+    ).join('');
+
+    document.getElementById('hold-modal').classList.remove('hidden');
+}
+
+function closeHoldModal() {
+    holdTicketId = null;
+    document.getElementById('hold-modal').classList.add('hidden');
+}
+
+async function submitHoldRequest() {
+    const remark   = document.getElementById('hold-remark').value.trim();
+    const blocking = document.getElementById('hold-blocking-select').value;
+    const btn      = document.getElementById('hold-submit-btn');
+
+    if (!blocking) { showToast('No higher-priority ticket selected.', 'error'); return; }
+    if (remark.length < 5) { showToast('Please write a short remark for your manager (min 5 characters).', 'error'); return; }
+
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-1.5"></i> Sending...';
+    btn.disabled = true;
+    try {
+        const res = await fetch(`${API}/worker/me/tickets/${holdTicketId}/request-hold`, {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ blocking_ticket_id: blocking, remark }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            showToast(data.detail || 'Hold request failed.', 'error');
+        } else {
+            showToast('Hold request sent — awaiting manager/admin approval. SLA keeps running until approved.', 'success');
+            closeHoldModal();
+            loadWorkerData();
+        }
+    } catch (e) {
+        showToast('Cannot reach server.', 'error');
+    }
+    btn.innerHTML = '<i class="fa-solid fa-paper-plane mr-1.5"></i> Send Hold Request';
+    btn.disabled = false;
+}
+
+async function executeHold(ticketId) {
+    if (!confirm('Put this ticket on hold now? Its SLA clock freezes and it will auto-resume when the higher-priority ticket is resolved.')) return;
+    try {
+        const res = await fetch(`${API}/worker/me/tickets/${ticketId}/execute-hold`, {
+            method: 'POST', headers,
+        });
+        const data = await res.json();
+        if (!res.ok) {
+            showToast(data.detail || 'Could not execute hold.', 'error');
+        } else {
+            showToast('Ticket is now on hold — SLA frozen.', 'success');
+        }
+        loadWorkerData();
+    } catch (e) {
+        showToast('Cannot reach server.', 'error');
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  APPROVALS — Help + Hold requests (managers/admins only)
+//  Shifted here from the Manager console so approvers handle
+//  everything from My Work.
+// ═══════════════════════════════════════════════════════════
+const IMS_USER = JSON.parse(localStorage.getItem('ims_user') || '{}');
+const IS_APPROVER = IMS_USER.role === 'MANAGER' || IMS_USER.role === 'ADMIN';
+let allHelpRequests = [];
+let allHoldRequests = [];
+
+async function loadApprovals() {
+    if (!IS_APPROVER) return;
+    document.getElementById('approvals-section').classList.remove('hidden');
+    try {
+        const [helpRes, holdRes] = await Promise.all([
+            fetch(`${API}/admin/help-requests`, { headers }),
+            fetch(`${API}/admin/hold-requests`, { headers }),
+        ]);
+        if (helpRes.ok) {
+            allHelpRequests = await helpRes.json();
+            const b = document.getElementById('help-requests-count');
+            b.textContent = allHelpRequests.length;
+            b.classList.toggle('hidden', !allHelpRequests.length);
+            renderHelpRequests();
+        }
+        if (holdRes.ok) {
+            allHoldRequests = await holdRes.json();
+            const b = document.getElementById('hold-requests-count');
+            b.textContent = allHoldRequests.length;
+            b.classList.toggle('hidden', !allHoldRequests.length);
+            renderHoldRequests();
+        }
+    } catch (e) { /* panels keep previous state; next refresh retries */ }
+}
+
+function renderHelpRequests() {
+    const el = document.getElementById('help-requests-list');
+    if (!allHelpRequests.length) {
+        el.innerHTML = `<div class="text-center py-8 text-slate-400">
+            <i class="fa-solid fa-circle-check text-2xl mb-2 block text-emerald-400/60"></i>
+            <p class="text-sm font-medium">No pending help requests</p>
+        </div>`;
+        return;
+    }
+    const PRI = {
+        critical: 'bg-red-100 text-red-700 border-red-200',
+        high:     'bg-orange-100 text-orange-700 border-orange-200',
+    };
+    el.innerHTML = allHelpRequests.map(r => `
+        <div class="flex items-center justify-between gap-4 p-4 rounded-2xl border border-slate-200 bg-slate-50/60 flex-wrap">
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1 flex-wrap">
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${PRI[r.ticket_priority] || 'bg-slate-100 text-slate-600'}">${r.ticket_priority}</span>
+                    ${r.ticket_category ? `<span class="text-[10px] text-slate-400">${formatCategory(r.ticket_category)}</span>` : ''}
+                </div>
+                <p class="text-navy-900 font-semibold text-sm truncate">${r.ticket_title}</p>
+                <p class="text-xs text-slate-500 mt-1"><strong>${r.lead_name}</strong> is requesting help from <strong>${r.helper_name}</strong></p>
+                <p class="text-[10px] text-slate-400 mt-0.5">${new Date(r.created_at).toLocaleString()}</p>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+                <button onclick="approveHelpRequest('${r.id}', '${r.helper_name.replace(/'/g,"\\'")}')"
+                    class="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-check"></i> Approve
+                </button>
+                <button onclick="denyHelpRequest('${r.id}', '${r.helper_name.replace(/'/g,"\\'")}')"
+                    class="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-200 text-slate-600 hover:bg-red-100 hover:text-red-600 transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-xmark"></i> Deny
+                </button>
+            </div>
+        </div>`).join('');
+}
+
+function renderHoldRequests() {
+    const el = document.getElementById('hold-requests-list');
+    if (!allHoldRequests.length) {
+        el.innerHTML = `<div class="text-center py-8 text-slate-400">
+            <i class="fa-solid fa-circle-check text-2xl mb-2 block text-emerald-400/60"></i>
+            <p class="text-sm font-medium">No pending hold requests</p>
+        </div>`;
+        return;
+    }
+    const PRI = {
+        critical: 'bg-red-100 text-red-700 border-red-200',
+        high:     'bg-orange-100 text-orange-700 border-orange-200',
+        medium:   'bg-amber-100 text-amber-700 border-amber-200',
+        low:      'bg-slate-100 text-slate-600 border-slate-200',
+    };
+    el.innerHTML = allHoldRequests.map(r => `
+        <div class="flex items-center justify-between gap-4 p-4 rounded-2xl border border-amber-200/70 bg-amber-50/40 flex-wrap">
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1 flex-wrap">
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${PRI[r.ticket_priority] || 'bg-slate-100 text-slate-600'}">${r.ticket_priority}</span>
+                    ${r.ticket_number ? `<span class="font-mono text-[10px] font-bold text-slate-500">#${r.ticket_number}</span>` : ''}
+                    ${r.ticket_category ? `<span class="text-[10px] text-slate-400">${formatCategory(r.ticket_category)}</span>` : ''}
+                </div>
+                <p class="text-navy-900 font-semibold text-sm truncate">${r.ticket_title}</p>
+                <p class="text-xs text-slate-500 mt-1">
+                    <strong>${r.worker_name}</strong> wants to pause this — blocked by
+                    <span class="font-bold text-red-600 uppercase">${r.blocking_ticket_priority || '?'}</span>
+                    ${r.blocking_ticket_number ? `<span class="font-mono font-bold">#${r.blocking_ticket_number}</span>` : ''}
+                    ${r.blocking_ticket_title ? `“${r.blocking_ticket_title}”` : ''}
+                </p>
+                <p class="text-xs text-slate-600 mt-1.5 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5">
+                    <i class="fa-solid fa-quote-left text-[9px] text-slate-300 mr-1"></i>${r.remark}
+                </p>
+                <p class="text-[10px] text-slate-400 mt-1">${new Date(r.created_at).toLocaleString()}</p>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+                <button onclick="approveHoldRequest('${r.id}', '${r.worker_name.replace(/'/g,"\\'")}')"
+                    class="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500 text-white hover:bg-emerald-600 transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-check"></i> Approve
+                </button>
+                <button onclick="denyHoldRequest('${r.id}', '${r.worker_name.replace(/'/g,"\\'")}')"
+                    class="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-200 text-slate-600 hover:bg-red-100 hover:text-red-600 transition flex items-center gap-1.5">
+                    <i class="fa-solid fa-xmark"></i> Deny
+                </button>
+            </div>
+        </div>`).join('');
+}
+
+async function approveHelpRequest(requestId, helperName) {
+    if (!confirm(`Approve help from ${helperName}? They will be added to the ticket immediately.`)) return;
+    try {
+        const res = await fetch(`${API}/admin/help-requests/${requestId}/approve`, { method: 'POST', headers });
+        if (res.ok) { showToast(`✅ Approved — ${helperName} added to ticket`, 'success'); }
+        else { const err = await res.json(); showToast(err.detail || 'Approval failed', 'error'); }
+    } catch (e) { showToast('Network error', 'error'); }
+    loadApprovals(); loadWorkerData();
+}
+
+async function denyHelpRequest(requestId, helperName) {
+    if (!confirm(`Deny this help request for ${helperName}?`)) return;
+    try {
+        const res = await fetch(`${API}/admin/help-requests/${requestId}/deny`, {
+            method: 'POST', headers, body: JSON.stringify({ notes: null }),
+        });
+        if (res.ok) { showToast(`Denied — ${helperName} was not added`, 'success'); }
+        else { const err = await res.json(); showToast(err.detail || 'Denial failed', 'error'); }
+    } catch (e) { showToast('Network error', 'error'); }
+    loadApprovals();
+}
+
+async function approveHoldRequest(requestId, workerName) {
+    if (!confirm(`Allow ${workerName} to put this ticket on hold? Their Hold button activates — the SLA only freezes when they click it.`)) return;
+    try {
+        const res = await fetch(`${API}/admin/hold-requests/${requestId}/approve`, { method: 'POST', headers });
+        if (res.ok) { showToast(`✅ Approved — ${workerName} can now hold the ticket`, 'success'); }
+        else { const err = await res.json(); showToast(err.detail || 'Approval failed', 'error'); }
+    } catch (e) { showToast('Network error', 'error'); }
+    loadApprovals(); loadWorkerData();
+}
+
+async function denyHoldRequest(requestId, workerName) {
+    const notes = prompt(`Reason for denying ${workerName}'s hold request (sent to the worker):`, '');
+    if (notes === null) return;
+    try {
+        const res = await fetch(`${API}/admin/hold-requests/${requestId}/deny`, {
+            method: 'POST', headers, body: JSON.stringify({ notes: notes || null }),
+        });
+        if (res.ok) { showToast(`Denied — SLA keeps running on that ticket`, 'success'); }
+        else { const err = await res.json(); showToast(err.detail || 'Denial failed', 'error'); }
+    } catch (e) { showToast('Network error', 'error'); }
+    loadApprovals();
+}
+
+loadApprovals();
+
+// ── Auto-refresh ──────────────────────────────────────────
+// Every 30s (only while the tab is visible): pulls fresh ticket +
+// approval state so hold approvals / resumes show up without a manual
+// reload. Modals live outside the re-rendered grids, so an open
+// Request-Hold form isn't wiped mid-typing.
+setInterval(() => {
+    if (document.hidden) return;
+    loadWorkerData();
+    loadApprovals();
+}, 30000);
+</script>
+    <!-- Hold Request Modal -->
+    <div id="hold-modal" class="fixed inset-0 z-[100] bg-navy-900/70 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div class="px-6 py-5 border-b border-slate-100 flex justify-between items-center">
+                <div>
+                    <h3 class="font-heading font-bold text-navy-900">Request Hold</h3>
+                    <p id="hold-ticket-title" class="text-xs text-slate-400 mt-0.5 truncate"></p>
+                </div>
+                <button onclick="closeHoldModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition">
+                    <i class="fa-solid fa-xmark text-slate-600 text-sm"></i>
+                </button>
+            </div>
+            <div class="p-5 space-y-4">
+                <p class="text-xs text-slate-400">
+                    Ask your manager/admin for permission to <strong>pause this ticket's SLA</strong>
+                    while you handle a higher-priority incident. The clock
+                    <strong>keeps running</strong> until they approve <em>and</em> you click Hold.
+                </p>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Blocked by (higher-priority ticket)</label>
+                    <select id="hold-blocking-select"
+                        class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-navy-900 text-sm bg-slate-50 focus:bg-white transition"></select>
+                </div>
+                <div>
+                    <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1.5">Remark for your manager <span class="text-red-400">*</span></label>
+                    <textarea id="hold-remark" rows="3" placeholder="e.g. The CRITICAL X-ray scanner failure needs my full attention — can't work on both in parallel."
+                        class="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-navy-900 text-sm bg-slate-50 focus:bg-white transition resize-none"></textarea>
+                </div>
+                <button id="hold-submit-btn" onclick="submitHoldRequest()"
+                    class="w-full py-2.5 rounded-xl text-sm font-bold bg-amber-500 text-white hover:bg-amber-600 transition">
+                    <i class="fa-solid fa-paper-plane mr-1.5"></i> Send Hold Request
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Delegate Helper Modal -->
+    <div id="delegate-modal" class="fixed inset-0 z-[100] bg-navy-900/70 backdrop-blur-sm flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-3xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div class="px-6 py-5 border-b border-slate-100 flex justify-between items-center">
+                <div>
+                    <h3 class="font-heading font-bold text-navy-900">Request Help</h3>
+                    <p id="delegate-ticket-title" class="text-xs text-slate-400 mt-0.5 truncate"></p>
+                </div>
+                <button onclick="closeDelegateModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition">
+                    <i class="fa-solid fa-xmark text-slate-600 text-sm"></i>
+                </button>
+            </div>
+            <div class="p-5">
+                <p class="text-xs text-slate-400 mb-3">
+                    Select a teammate to request help from. Your manager or admin
+                    must approve before they're added — you keep working alone
+                    until then. Penalty points apply to both of you if the SLA
+                    breaches once approved.
+                </p>
+                <div id="delegate-worker-list" class="space-y-2 max-h-72 overflow-y-auto">
+                    <p class="text-center text-sm text-slate-400 py-8">Loading workers...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+<script>
+    // ── Nav: show current user name + wire sign-out ─────────
+    (function () {
+        const el = document.getElementById('nav-user');
+        if (!el) return;
+        try {
+            const u = JSON.parse(localStorage.getItem('ims_user') || '{}');
+            if (u.full_name) el.textContent = u.full_name;
+        } catch (e) { /* ignore */ }
+    })();
+</script>
+</body>
+</html>

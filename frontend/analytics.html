@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+    // ── Per-tab session isolation ─────────────────────────────
+    // sessionStorage is scoped to a single tab, so different tabs can be
+    // signed in as different users at the same time — useful for demos.
+    // We shim just the two IMS auth keys; everything else on localStorage
+    // still works normally.
+    (function () {
+        const KEYS = new Set(['ims_token', 'ims_user']);
+        const _get = localStorage.getItem.bind(localStorage);
+        const _set = localStorage.setItem.bind(localStorage);
+        const _del = localStorage.removeItem.bind(localStorage);
+        localStorage.getItem    = k => KEYS.has(k) ? sessionStorage.getItem(k)      : _get(k);
+        localStorage.setItem    = (k, v) => KEYS.has(k) ? sessionStorage.setItem(k, v) : _set(k, v);
+        localStorage.removeItem = k => KEYS.has(k) ? sessionStorage.removeItem(k)   : _del(k);
+    })();
+</script>
+
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IMS | Analytics</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700;800&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script>
+tailwind.config = {
+  theme: { extend: {
+    fontFamily: { heading:['Outfit','sans-serif'], body:['Inter','sans-serif'] },
+    colors: {
+      navy:  { 900:'#0A192F', 800:'#112240', 700:'#1C3454' },
+      brand: { blue:'#007AC3', purple:'#6A2A88', magenta:'#B8205C' },
+      ink:   { DEFAULT:'#0F172A', soft:'#334155', muted:'#64748B', faint:'#94A3B8' }
+    },
+    backgroundImage: { 'adani-gradient':'linear-gradient(to right,#007AC3,#6A2A88,#B8205C)' },
+    boxShadow: {
+      'soft-xs':'0 1px 2px rgba(10,25,47,.04)',
+      'soft':'0 1px 3px rgba(10,25,47,.05), 0 4px 12px -2px rgba(10,25,47,.05)',
+      'soft-md':'0 4px 6px -1px rgba(10,25,47,.05), 0 10px 24px -4px rgba(10,25,47,.06)',
+      'soft-lg':'0 8px 16px -4px rgba(10,25,47,.06), 0 24px 48px -8px rgba(10,25,47,.08)'
+    }
+  }}
+}
+</script>
+    <style>
+        .stat-card { transition: transform 0.2s, box-shadow 0.2s; }
+        .stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px -6px rgba(10,25,47,0.12); }
+    </style>
+<style data-ui-upgrade>
+  body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+         text-rendering:optimizeLegibility; letter-spacing:-0.006em; }
+  h1,h2,h3,h4 { letter-spacing:-0.02em; }
+  h1 { line-height:1.15; } h2,h3 { line-height:1.25; } p { line-height:1.6; }
+
+  /* Soften default text from black to slate on LIGHT pages only */
+  body[class*="F8FAFC"] { color:#334155; }
+
+  /* Tabular figures so live counters/timers don't shift width */
+  .nums, [id^="stat-"], [id^="s-"], [id^="wd-countdown-"], [id^="countdown-"] {
+    font-variant-numeric: tabular-nums; font-feature-settings:"tnum";
+  }
+
+  /* One calm transition, scoped to interactive elements */
+  a, button, input, select, textarea, [role="button"] {
+    transition: color .2s ease, background-color .2s ease, border-color .2s ease,
+                box-shadow .2s ease, transform .2s ease;
+  }
+
+  /* Keyboard-only focus ring (brand-tinted); none on mouse click */
+  :focus { outline:none; }
+  a:focus-visible, button:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [role="button"]:focus-visible {
+    box-shadow: 0 0 0 3px rgba(0,122,195,.30); border-radius:10px;
+  }
+
+  /* Gentle press feedback */
+  button:active, [role="button"]:active { transform: translateY(1px); }
+
+  /* Respect reduced-motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    *,*::before,*::after { transition-duration:.01ms!important; animation-duration:.01ms!important; scroll-behavior:auto!important; }
+  }
+</style>
+<script>
+    // ── Auth guard (runs before any other script on this page) ─────
+    (function () {
+        const token = localStorage.getItem('ims_token');
+        const userStr = localStorage.getItem('ims_user');
+
+        if (!token || !userStr) {
+            window.location.replace('login.html');
+            return;
+        }
+
+        // JWT expiry check — decode the payload without needing a library
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if (payload.exp && payload.exp * 1000 < Date.now()) {
+                localStorage.removeItem('ims_token');
+                localStorage.removeItem('ims_user');
+                window.location.replace('login.html?expired=1');
+                return;
+            }
+        } catch (e) {
+            // Malformed token → force re-login
+            localStorage.removeItem('ims_token');
+            localStorage.removeItem('ims_user');
+            window.location.replace('login.html');
+            return;
+        }
+
+        // Role gate — set inside each page's script tag via <body data-requires-role="MANAGER,ADMIN">
+        const user = JSON.parse(userStr);
+        const requires = document.body.getAttribute('data-requires-role');
+        if (requires) {
+            const allowed = requires.split(',').map(s => s.trim());
+            if (!allowed.includes(user.role)) {
+                window.location.replace('dashboard.html?denied=1');
+                return;
+            }
+        }
+    })();
+</script>
+<style data-qol-polish>
+  /* Slim, calm scrollbars */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; border: 2px solid transparent; background-clip: content-box; }
+
+  /* Content gently fades in on load */
+  @keyframes qol-fade-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  main { animation: qol-fade-up .35s ease-out; }
+
+  /* Cards lift slightly on hover */
+  .shadow-soft { transition: box-shadow .2s ease, transform .2s ease; }
+  .shadow-soft:hover { box-shadow: 0 6px 14px -2px rgba(10,25,47,.08), 0 16px 32px -8px rgba(10,25,47,.09); }
+
+  /* Table rows get a subtle left accent on hover */
+  tbody tr { transition: background-color .15s ease, box-shadow .15s ease; }
+  tbody tr:hover { box-shadow: inset 3px 0 0 #007AC3; }
+
+  @media (prefers-reduced-motion: reduce) { main { animation: none; } }
+</style>
+</head>
+<body class="font-body bg-[#F8FAFC] antialiased">
+
+    <nav class="fixed w-full z-50 bg-white/90 backdrop-blur-lg border-b border-slate-200/50 shadow-soft">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center h-16">
+            <a href="basic.html" class="flex items-center gap-2.5">
+                <div class="w-7 h-7 rounded-md bg-adani-gradient flex items-center justify-center shadow-soft">
+                    <i class="fa-solid fa-shield-halved text-white text-xs"></i>
+                </div>
+                <span class="font-heading font-bold text-xl text-navy-900">IMS</span>
+            </a>
+            <div class="flex items-center gap-1">
+                <a href="dashboard.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Dashboard</a>
+                <a href="tickets.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Incidents</a>
+                <a href="manager.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">Manager</a>
+                <a href="sla.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">SLA</a>
+                <a href="worker.html" class="px-4 py-2 rounded-full text-sm text-slate-500 hover:text-navy-900 hover:bg-slate-100 transition">My Work</a>
+                <a href="analytics.html" class="px-4 py-2 rounded-full text-sm font-bold text-brand-blue">Analytics</a>
+                <button onclick="window.location.href='report.html'" class="ml-2 px-5 py-2 rounded-full text-white text-sm font-semibold bg-navy-900 hover:bg-navy-800 transition shadow-md shadow-navy-900/20 hover:-translate-y-0.5">
+                    <i class="fa-solid fa-plus mr-1.5 text-xs"></i>Report
+                </button>
+                <div class="ml-3 flex items-center gap-2 pl-3 border-l border-slate-200">
+                    <span id="nav-user" class="hidden sm:inline text-xs text-slate-500 font-medium max-w-[110px] truncate"></span>
+                    <button onclick="if (confirm('Sign out?')) { localStorage.removeItem('ims_token'); localStorage.removeItem('ims_user'); window.location.href='login.html'; }"
+                            class="w-8 h-8 rounded-full text-slate-500 hover:text-red-600 hover:bg-red-50 transition flex items-center justify-center" title="Sign out">
+                        <i class="fa-solid fa-right-from-bracket text-xs"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <main class="pt-28 pb-16 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+
+        <div class="mb-8 flex justify-between items-end">
+            <div>
+                <p class="text-xs font-semibold text-brand-blue uppercase tracking-widest mb-1">Performance Metrics</p>
+                <h1 class="font-heading text-3xl font-extrabold text-navy-900">Analytics & SLA Center</h1>
+                <p class="text-slate-400 text-sm mt-1.5">Deep dive into operational metrics and response times</p>
+            </div>
+            <div class="flex items-center gap-2">
+                <button id="download-report-btn" onclick="downloadAnalyticsReport()"
+                    class="hidden text-sm bg-navy-900 text-white px-4 py-2 rounded-xl hover:bg-navy-800 transition shadow-soft flex items-center gap-2">
+                    <i class="fa-solid fa-file-arrow-down"></i> Download Report
+                </button>
+                <button onclick="loadAnalytics()" class="text-sm bg-white border border-slate-200 px-4 py-2 rounded-xl text-slate-600 hover:text-brand-blue hover:border-brand-blue transition shadow-soft flex items-center gap-2">
+                    <i class="fa-solid fa-rotate-right"></i> Refresh
+                </button>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-5 mb-8">
+            <div class="stat-card bg-white rounded-2xl p-5 shadow-soft border border-slate-200/60 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-20 h-20 bg-gradient-to-bl from-blue-50 to-transparent rounded-bl-full"></div>
+                <div class="w-8 h-8 rounded-xl bg-blue-50 flex items-center justify-center mb-3">
+                    <i class="fa-solid fa-ticket text-brand-blue text-xs"></i>
+                </div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Total</p>
+                <p id="s-total" class="font-heading text-3xl font-extrabold text-navy-900">--</p>
+            </div>
+            <div class="stat-card bg-white rounded-2xl p-5 shadow-soft border border-slate-200/60 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-20 h-20 bg-gradient-to-bl from-amber-50 to-transparent rounded-bl-full"></div>
+                <div class="w-8 h-8 rounded-xl bg-amber-50 flex items-center justify-center mb-3">
+                    <i class="fa-solid fa-stopwatch text-amber-500 text-xs"></i>
+                </div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">SLA Breaches</p>
+                <p id="s-breaches" class="font-heading text-3xl font-extrabold text-amber-500">--</p>
+            </div>
+            <div class="stat-card bg-white rounded-2xl p-5 shadow-soft border border-slate-200/60 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-20 h-20 bg-gradient-to-bl from-emerald-50 to-transparent rounded-bl-full"></div>
+                <div class="w-8 h-8 rounded-xl bg-emerald-50 flex items-center justify-center mb-3">
+                    <i class="fa-solid fa-check-double text-emerald-500 text-xs"></i>
+                </div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Resolved + Closed</p>
+                <p id="s-resolved" class="font-heading text-3xl font-extrabold text-emerald-500">--</p>
+            </div>
+            <div class="stat-card bg-white rounded-2xl p-5 shadow-soft border border-slate-200/60 relative overflow-hidden">
+                <div class="absolute right-0 top-0 w-20 h-20 bg-gradient-to-bl from-red-50 to-transparent rounded-bl-full"></div>
+                <div class="w-8 h-8 rounded-xl bg-red-50 flex items-center justify-center mb-3">
+                    <i class="fa-solid fa-fire text-red-500 text-xs"></i>
+                </div>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Critical Open</p>
+                <p id="s-critical" class="font-heading text-3xl font-extrabold text-red-600">--</p>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+
+            <div class="bg-white p-6 rounded-3xl shadow-soft border border-slate-200/60">
+                <div class="mb-4">
+                    <h3 class="font-heading font-bold text-navy-900 text-base">Incidents by Status</h3>
+                    <p class="text-xs text-slate-400 mt-0.5">Current distribution across all states</p>
+                </div>
+                <div class="relative h-64 flex items-center justify-center">
+                    <canvas id="chart-status"></canvas>
+                    <div id="chart-status-empty" class="hidden absolute inset-0 flex flex-col items-center justify-center text-slate-400">
+                        <i class="fa-solid fa-chart-pie text-3xl mb-2 opacity-30"></i>
+                        <p class="text-sm">No data yet</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-white p-6 rounded-3xl shadow-soft border border-slate-200/60">
+                <div class="mb-4">
+                    <h3 class="font-heading font-bold text-navy-900 text-base">Incidents by Priority</h3>
+                    <p class="text-xs text-slate-400 mt-0.5">Volume breakdown per severity level</p>
+                </div>
+                <div class="relative h-64">
+                    <canvas id="chart-priority"></canvas>
+                    <div id="chart-priority-empty" class="hidden absolute inset-0 flex flex-col items-center justify-center text-slate-400">
+                        <i class="fa-solid fa-chart-bar text-3xl mb-2 opacity-30"></i>
+                        <p class="text-sm">No data yet</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white p-6 rounded-3xl shadow-soft border border-slate-200/60 mb-6">
+            <div class="mb-4">
+                <h3 class="font-heading font-bold text-navy-900 text-base">Incidents by Department / Category</h3>
+                <p class="text-xs text-slate-400 mt-0.5">ML-assigned category distribution</p>
+            </div>
+            <div class="relative h-72">
+                <canvas id="chart-category"></canvas>
+                <div id="chart-category-empty" class="hidden absolute inset-0 flex flex-col items-center justify-center text-slate-400">
+                    <i class="fa-solid fa-chart-bar text-3xl mb-2 opacity-30"></i>
+                    <p class="text-sm">No data yet</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-slate-900 rounded-3xl shadow-xl overflow-hidden border border-slate-800">
+            <div class="px-8 py-5 border-b border-slate-800 flex justify-between items-center" style="background: rgba(255,255,255,0.03);">
+                <h2 class="font-heading font-bold text-white flex items-center gap-2.5 text-base">
+                    <i class="fa-solid fa-terminal text-brand-blue"></i> Raw Data Feed
+                </h2>
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400" style="box-shadow: 0 0 6px #34d399;"></span>
+                    <span class="px-3 py-1 bg-emerald-500/15 text-emerald-400 text-xs font-bold rounded-full border border-emerald-500/20">LIVE</span>
+                </div>
+            </div>
+            <div id="analytics-raw" class="p-8">
+                <div class="text-center text-slate-500 py-10">
+                    <i class="fa-solid fa-circle-notch fa-spin text-3xl mb-4 block text-slate-600"></i>
+                    <p class="text-sm">Connecting to FastAPI analytics endpoint...</p>
+                    <p class="text-xs text-slate-600 mt-1">GET /analytics/summary</p>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+<script>
+const API = 'http://localhost:8000';
+const token = localStorage.getItem('ims_token');
+const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+
+// Chart instances — kept so we can destroy and rebuild on refresh
+let chartStatus = null;
+let chartPriority = null;
+let chartCategory = null;
+let latestAnalyticsData = null;   // cached for PDF export
+
+// Brand colors
+const COLORS = {
+    status: {
+        open:            { bg: 'rgba(0, 122, 195, 0.85)',  border: '#007AC3' },
+        in_progress:     { bg: 'rgba(106, 42, 136, 0.85)', border: '#6A2A88' },
+        critical_review: { bg: 'rgba(220, 38,  38,  0.85)', border: '#dc2626' },
+        resolved:        { bg: 'rgba(16, 185,  129, 0.85)', border: '#10b981' },
+        closed:          { bg: 'rgba(148, 163, 184, 0.85)', border: '#94a3b8' },
+    },
+    priority: {
+        low:      { bg: 'rgba(148, 163, 184, 0.8)', border: '#94a3b8' },
+        medium:   { bg: 'rgba(245, 158,  11, 0.8)', border: '#f59e0b' },
+        high:     { bg: 'rgba(249, 115,  22, 0.8)', border: '#f97316' },
+        critical: { bg: 'rgba(239,  68,  68, 0.85)', border: '#ef4444' },
+    },
+};
+
+// Gradient palette for categories
+const CAT_PALETTE = [
+    'rgba(0,122,195,0.8)', 'rgba(106,42,136,0.8)', 'rgba(184,32,92,0.8)',
+    'rgba(16,185,129,0.8)', 'rgba(245,158,11,0.8)', 'rgba(249,115,22,0.8)',
+    'rgba(99,102,241,0.8)', 'rgba(20,184,166,0.8)', 'rgba(239,68,68,0.8)',
+];
+
+const chartDefaults = {
+    font: { family: 'Inter, sans-serif' },
+    color: '#94a3b8',
+};
+Chart.defaults.font.family = chartDefaults.font.family;
+Chart.defaults.color = chartDefaults.color;
+
+async function loadAnalytics() {
+    // Show the Download Report button for Admins only
+    try {
+        const user = JSON.parse(localStorage.getItem('ims_user') || '{}');
+        const btn = document.getElementById('download-report-btn');
+        if (btn) btn.classList.toggle('hidden', user.role !== 'ADMIN');
+    } catch (e) {}
+
+    try {
+        const res = await fetch(`${API}/analytics/summary`, { headers });
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+
+        updateStatCards(data);
+        renderStatusChart(data.by_status);
+        renderPriorityChart(data.by_priority);
+        renderCategoryChart(data.by_category);
+        renderRaw(data);
+        latestAnalyticsData = data;   // cache for PDF export
+    } catch(e) {
+        document.getElementById('analytics-raw').innerHTML = `
+            <div class="text-center text-slate-500 py-10">
+                <i class="fa-solid fa-server text-3xl mb-4 block text-slate-600"></i>
+                <p class="text-sm font-medium">Cannot reach GET /analytics/summary</p>
+                <p class="text-xs text-slate-600 mt-1">Start the FastAPI server to see live data</p>
+            </div>`;
+    }
+}
+
+function updateStatCards(data) {
+    document.getElementById('s-total').textContent    = data.total_tickets ?? '--';
+    document.getElementById('s-breaches').textContent = data.sla_breaches ?? '--';
+    document.getElementById('s-resolved').textContent = (data.by_status?.resolved ?? 0) + (data.by_status?.closed ?? 0);
+    
+    // FIX: Calculate Critical Open by subtracting resolved/closed critical tickets from the total critical priority count
+    const totalCritical = data.by_priority?.critical ?? 0;
+    const resolvedTickets = data.by_status?.resolved ?? 0;
+    const closedTickets = data.by_status?.closed ?? 0;
+    
+    document.getElementById('s-critical').textContent = Math.max(0, totalCritical - (resolvedTickets + closedTickets));
+}
+
+function renderStatusChart(byStatus) {
+    if (chartStatus) chartStatus.destroy();
+
+    const entries = Object.entries(byStatus || {}).filter(([, v]) => v > 0);
+    if (!entries.length) {
+        document.getElementById('chart-status-empty').classList.remove('hidden');
+        return;
+    }
+    document.getElementById('chart-status-empty').classList.add('hidden');
+
+    const labels = entries.map(([k]) => k.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase()));
+    const values = entries.map(([, v]) => v);
+    const bgs    = entries.map(([k]) => COLORS.status[k]?.bg    || 'rgba(148,163,184,0.8)');
+    const borders= entries.map(([k]) => COLORS.status[k]?.border || '#94a3b8');
+
+    chartStatus = new Chart(document.getElementById('chart-status'), {
+        type: 'doughnut',
+        data: { labels, datasets: [{ data: values, backgroundColor: bgs, borderColor: borders, borderWidth: 2, hoverOffset: 8 }] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '68%',
+            plugins: {
+                legend: {
+                    position: 'right',
+                    labels: { padding: 16, usePointStyle: true, pointStyleWidth: 10, font: { size: 12 } }
+                },
+                tooltip: {
+                    callbacks: {
+                        label: ctx => ` ${ctx.label}: ${ctx.raw} (${Math.round(ctx.raw / ctx.chart.data.datasets[0].data.reduce((a,b)=>a+b,0) * 100)}%)`
+                    }
+                }
+            }
+        }
+    });
+}
+
+function renderPriorityChart(byPriority) {
+    if (chartPriority) chartPriority.destroy();
+
+    const order  = ['critical', 'high', 'medium', 'low'];
+    const labels = order.map(k => k.charAt(0).toUpperCase() + k.slice(1));
+    const values = order.map(k => byPriority?.[k] || 0);
+    const bgs    = order.map(k => COLORS.priority[k]?.bg    || 'rgba(148,163,184,0.8)');
+    const borders= order.map(k => COLORS.priority[k]?.border || '#94a3b8');
+
+    if (!values.some(v => v > 0)) {
+        document.getElementById('chart-priority-empty').classList.remove('hidden');
+        return;
+    }
+    document.getElementById('chart-priority-empty').classList.add('hidden');
+
+    chartPriority = new Chart(document.getElementById('chart-priority'), {
+        type: 'bar',
+        data: { labels, datasets: [{ label: 'Incidents', data: values, backgroundColor: bgs, borderColor: borders, borderWidth: 2, borderRadius: 8, borderSkipped: false }] },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: ctx => ` ${ctx.raw} incidents` } }
+            },
+            scales: {
+                x: { grid: { display: false }, border: { display: false } },
+                y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: 'rgba(148,163,184,0.15)' }, border: { display: false } }
+            }
+        }
+    });
+}
+
+function renderCategoryChart(byCategory) {
+    if (chartCategory) chartCategory.destroy();
+
+    const entries = Object.entries(byCategory || {}).filter(([k]) => k !== 'uncategorized' || true).sort(([,a],[,b]) => b - a);
+    if (!entries.length || entries.every(([,v]) => v === 0)) {
+        document.getElementById('chart-category-empty').classList.remove('hidden');
+        return;
+    }
+    document.getElementById('chart-category-empty').classList.add('hidden');
+
+    const labels  = entries.map(([k]) => formatCategory(k));
+    const values  = entries.map(([,v]) => v);
+    const bgs     = entries.map((_, i) => CAT_PALETTE[i % CAT_PALETTE.length]);
+
+    chartCategory = new Chart(document.getElementById('chart-category'), {
+        type: 'bar',
+        data: { labels, datasets: [{ label: 'Incidents', data: values, backgroundColor: bgs, borderWidth: 0, borderRadius: 6 }] },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: { callbacks: { label: ctx => ` ${ctx.raw} incidents` } }
+            },
+            scales: {
+                x: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: 'rgba(148,163,184,0.15)' }, border: { display: false } },
+                y: { grid: { display: false }, border: { display: false } }
+            }
+        }
+    });
+}
+
+function renderRaw(data) {
+    document.getElementById('analytics-raw').innerHTML = `
+        <pre class="text-left text-xs font-mono text-emerald-400 bg-slate-950 rounded-2xl p-7 overflow-auto border border-slate-800 shadow-inner leading-relaxed">${JSON.stringify(data, null, 2)}</pre>`;
+}
+
+loadAnalytics();
+
+// ── Category display formatter ────────────────────────────
+function formatCategory(cat) {
+    if (!cat) return 'Uncategorized';
+    const map = {
+        'it':                   'IT',
+        'hr':                   'HR',
+        'security':             'Security',
+        'technical_operations': 'Technical Operations',
+        'marketing':            'Marketing',
+        'legal':                'Legal',
+    };
+    return map[cat.toLowerCase()] ||
+           cat.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// ── Admin: Download Analytics Report as PDF ──────────────
+// Draws the report directly from data (tables + inline bars) instead
+// of embedding stretched chart screenshots — crisp at any zoom/print.
+const PDF_STATUS_COLORS = {
+    open:            [59, 130, 246],
+    in_progress:     [245, 158, 11],
+    critical_review: [220, 38, 38],
+    resolved:        [16, 185, 129],
+    closed:          [100, 116, 139],
+};
+const PDF_PRIORITY_COLORS = {
+    low:      [100, 116, 139],
+    medium:   [245, 158, 11],
+    high:     [234, 88, 12],
+    critical: [220, 38, 38],
+};
+const PDF_PALETTE = [[0,122,195],[106,42,136],[184,32,92],[16,185,129],[245,158,11],[100,116,139],[220,38,38],[59,130,246]];
+
+function _pdfHeader(doc, title) {
+    doc.setFillColor(10, 25, 47);
+    doc.rect(0, 0, 210, 26, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(15);
+    doc.setFont(undefined, 'bold');
+    doc.text(title, 14, 16);
+    doc.setFontSize(8.5);
+    doc.setFont(undefined, 'normal');
+    doc.setTextColor(148, 163, 184);
+    doc.text(new Date().toLocaleString(), 196, 16, { align: 'right' });
+    doc.setDrawColor(0, 122, 195);
+    doc.setLineWidth(1.2);
+    doc.line(0, 26, 210, 26);
+}
+
+function _pdfStatCard(doc, x, y, w, label, value, rgb) {
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(x, y, w, 22, 3, 3, 'FD');
+    doc.setTextColor(rgb[0], rgb[1], rgb[2]);
+    doc.setFontSize(16);
+    doc.setFont(undefined, 'bold');
+    doc.text(String(value), x + w / 2, y + 11, { align: 'center' });
+    doc.setTextColor(100, 116, 139);
+    doc.setFontSize(7.5);
+    doc.setFont(undefined, 'normal');
+    doc.text(label.toUpperCase(), x + w / 2, y + 17.5, { align: 'center' });
+}
+
+// One breakdown section: title + rows of [chip] label  count  pct  [bar]
+function _pdfBreakdown(doc, y, title, entries, colorFor) {
+    const total = entries.reduce((a, [, c]) => a + c, 0) || 1;
+    const max   = Math.max(...entries.map(([, c]) => c), 1);
+
+    if (y > 240) { doc.addPage(); y = 20; }
+    doc.setTextColor(10, 25, 47);
+    doc.setFontSize(12);
+    doc.setFont(undefined, 'bold');
+    doc.text(title, 14, y);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.3);
+    doc.line(14, y + 2, 196, y + 2);
+    y += 9;
+
+    entries.forEach(([label, count], idx) => {
+        if (y > 275) { doc.addPage(); y = 20; }
+        const rgb = colorFor(label, idx);
+        const pct = Math.round((count / total) * 100);
+
+        // color chip
+        doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+        doc.circle(17, y - 1.2, 1.6, 'F');
+        // label
+        doc.setTextColor(30, 41, 59);
+        doc.setFontSize(9.5);
+        doc.setFont(undefined, 'normal');
+        doc.text(label.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), 22, y);
+        // count + pct
+        doc.setFont(undefined, 'bold');
+        doc.text(String(count), 108, y, { align: 'right' });
+        doc.setFont(undefined, 'normal');
+        doc.setTextColor(100, 116, 139);
+        doc.text(`${pct}%`, 122, y, { align: 'right' });
+        // bar (track + fill)
+        doc.setFillColor(241, 245, 249);
+        doc.roundedRect(128, y - 3.2, 68, 4, 2, 2, 'F');
+        const fillW = Math.max(2.5, (count / max) * 68);
+        doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+        doc.roundedRect(128, y - 3.2, fillW, 4, 2, 2, 'F');
+
+        y += 8;
+    });
+    return y + 6;
+}
+
+function _pdfFooter(doc) {
+    const pages = doc.getNumberOfPages();
+    for (let p = 1; p <= pages; p++) {
+        doc.setPage(p);
+        doc.setFontSize(7.5);
+        doc.setTextColor(148, 163, 184);
+        doc.text('Generated by Adani IMS — Admin export', 14, 291);
+        doc.text(`Page ${p} of ${pages}`, 196, 291, { align: 'right' });
+    }
+}
+
+// Capture a live Chart.js canvas at its TRUE aspect ratio on a white
+// background (raw toBase64Image() is transparent → grey blocks in PDFs,
+// and fixed 100x60 boxes were what stretched the old export).
+function _chartImage(chart) {
+    const src = chart.canvas;
+    const tmp = document.createElement('canvas');
+    tmp.width = src.width; tmp.height = src.height;
+    const ctx = tmp.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, tmp.width, tmp.height);
+    ctx.drawImage(src, 0, 0);
+    return { data: tmp.toDataURL('image/png'), ratio: src.height / src.width };
+}
+
+// Place a chart with correct proportions inside a max box (mm)
+function _pdfChart(doc, chart, x, y, maxW, maxH) {
+    if (!chart) return 0;
+    try {
+        const img = _chartImage(chart);
+        let w = maxW, h = w * img.ratio;
+        if (h > maxH) { h = maxH; w = h / img.ratio; }
+        doc.setDrawColor(226, 232, 240);
+        doc.roundedRect(x - 2, y - 2, w + 4, h + 4, 2, 2, 'D');
+        doc.addImage(img.data, 'PNG', x, y, w, h);
+        return h + 4;
+    } catch (e) { return 0; }
+}
+
+function downloadAnalyticsReport() {
+    if (!window.jspdf) { alert('PDF library not loaded.'); return; }
+    if (!latestAnalyticsData) { alert('No data loaded yet — click Refresh first.'); return; }
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const d = latestAnalyticsData;
+
+    _pdfHeader(doc, 'Adani IMS — Analytics Report');
+
+    // Summary stat cards
+    const total    = d.total_tickets ?? Object.values(d.by_status || {}).reduce((a, b) => a + b, 0);
+    const breaches = d.sla_breaches ?? 0;
+    const resolved = (d.by_status?.resolved ?? 0) + (d.by_status?.closed ?? 0);
+    const active   = (d.by_status?.open ?? 0) + (d.by_status?.in_progress ?? 0) + (d.by_status?.critical_review ?? 0);
+
+    let y = 36;
+    const cw = 43, gap = 4.5;
+    _pdfStatCard(doc, 14,               y, cw, 'Total Incidents', total,    [10, 25, 47]);
+    _pdfStatCard(doc, 14 + (cw + gap),  y, cw, 'Active',          active,   [0, 122, 195]);
+    _pdfStatCard(doc, 14 + 2*(cw + gap),y, cw, 'SLA Breaches',    breaches, [220, 38, 38]);
+    _pdfStatCard(doc, 14 + 3*(cw + gap),y, cw, 'Resolved + Closed', resolved, [16, 185, 129]);
+    y += 34;
+
+    // ── Charts (live Chart.js canvases, aspect-correct) ──
+    doc.setTextColor(10, 25, 47);
+    doc.setFontSize(12);
+    doc.setFont(undefined, 'bold');
+    doc.text('Incidents by Status', 14, y);
+    doc.text('Incidents by Priority', 108, y);
+    y += 4;
+    const hLeft  = _pdfChart(doc, chartStatus,   14,  y, 84, 68);
+    const hRight = _pdfChart(doc, chartPriority, 108, y, 88, 68);
+    y += Math.max(hLeft, hRight, 10) + 10;
+
+    if (y > 200) { doc.addPage(); y = 20; }
+    doc.setFontSize(12);
+    doc.setFont(undefined, 'bold');
+    doc.setTextColor(10, 25, 47);
+    doc.text('Incidents by Department', 14, y);
+    y += 4;
+    y += _pdfChart(doc, chartCategory, 14, y, 130, 70) + 10;
+
+    // ── Detailed breakdown tables on a fresh page ──
+    doc.addPage();
+    y = 20;
+    doc.setTextColor(10, 25, 47);
+    doc.setFontSize(13);
+    doc.setFont(undefined, 'bold');
+    doc.text('Detailed Breakdown', 14, y);
+    y += 10;
+
+    // Breakdown sections (sorted by count, descending)
+    const sortDesc = obj => Object.entries(obj || {}).sort((a, b) => b[1] - a[1]);
+
+    y = _pdfBreakdown(doc, y, 'Incidents by Status', sortDesc(d.by_status),
+        (label) => PDF_STATUS_COLORS[label] || [100, 116, 139]);
+
+    // Priority in fixed severity order reads better than sorted
+    const prioOrder = ['critical', 'high', 'medium', 'low'];
+    const prioEntries = prioOrder.filter(p => (d.by_priority || {})[p] != null)
+                                 .map(p => [p, d.by_priority[p]]);
+    y = _pdfBreakdown(doc, y, 'Incidents by Priority', prioEntries,
+        (label) => PDF_PRIORITY_COLORS[label] || [100, 116, 139]);
+
+    y = _pdfBreakdown(doc, y, 'Incidents by Department', sortDesc(d.by_category),
+        (_, idx) => PDF_PALETTE[idx % PDF_PALETTE.length]);
+
+    _pdfFooter(doc);
+    doc.save(`IMS_Analytics_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
+}
+
+</script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+<script>
+    // ── Nav: show current user name + wire sign-out ─────────
+    (function () {
+        const el = document.getElementById('nav-user');
+        if (!el) return;
+        try {
+            const u = JSON.parse(localStorage.getItem('ims_user') || '{}');
+            if (u.full_name) el.textContent = u.full_name;
+        } catch (e) { /* ignore */ }
+    })();
+</script>
+</body>
+</html>
